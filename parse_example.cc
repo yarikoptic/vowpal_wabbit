@@ -5,21 +5,39 @@ embodied in the content of this file are licensed under the BSD
  */
 
 #include <math.h>
+#include <ctype.h>
 #include "parse_example.h"
 #include "hash.h"
 #include "cache.h"
 #include "unique_sort.h"
 
-inline size_t hashstring (substring s, unsigned long h)
+size_t hashstring (substring s, unsigned long h)
 {
   size_t ret = h;
-  while (s.start != s.end)
-    if (*s.start > 47 && *s.start < 58)
-      ret = 10*ret + *(s.start++) - 48;
+  char *p = s.start;
+  while (p != s.end)
+    if (isdigit(*p))
+      ret = 10*ret + *(p++) - '0';
     else
       return uniform_hash((unsigned char *)s.start, s.end - s.start, h);
 
   return ret;
+}
+
+size_t hashall (substring s, unsigned long h)
+{
+  return uniform_hash((unsigned char *)s.start, s.end - s.start, h);
+}
+
+hash_func_t getHasher(const string& s){
+  if (s=="strings")
+    return hashstring;
+  else if(s=="all")
+    return hashall;
+  else{
+    cerr << "Unknown hash function: " << s << ". Exiting " << endl;
+    exit(1);
+  }
 }
 
 void feature_value(substring &s, v_array<substring>& name, float &v)
@@ -138,7 +156,7 @@ int read_features(parser* p, void* ex)
 	}
 	if (audit)
 	  base = c_string_of_substring(p->name[0]);
-	channel_hash = hashstring(p->name[0], hash_base);
+	channel_hash = p->hasher(p->name[0], hash_base);
       }
     else
       {
@@ -159,8 +177,9 @@ int read_features(parser* p, void* ex)
       feature_value(*i, p->name, v);
       v *= channel_v;
 
-      size_t word_hash = (hashstring(p->name[0], channel_hash)) & mask;
+      size_t word_hash = (p->hasher(p->name[0], channel_hash)) & mask;
       feature f = {v,word_hash};
+      ae->sum_feat_sq[index] += v*v;
       push(ae->atomics[index], f);
     }
 
@@ -174,7 +193,7 @@ int read_features(parser* p, void* ex)
 	  feature_value(*i, p->name, v);
 	  v *= channel_v;
 
-	  size_t word_hash = (hashstring(p->name[0], channel_hash)) & mask;
+	  size_t word_hash = (p->hasher(p->name[0], channel_hash)) & mask;
       
 	  char* feature = c_string_of_substring(p->name[0]);
 	  audit_data ad = {copy(base), feature, word_hash, v, true};

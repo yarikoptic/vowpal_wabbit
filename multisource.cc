@@ -10,7 +10,7 @@ int really_read(int sock, void* in, size_t count)
 {
   char* buf = (char*)in;
   size_t done = 0;
-  int r= 0;
+  int r = 0;
   while (done < count)
     {
       if ((r = read(sock,buf,count-done)) == 0)
@@ -18,7 +18,7 @@ int really_read(int sock, void* in, size_t count)
       else
 	if (r < 0)
 	  {
-	    cerr << "argh! bad read! " << endl;
+	    cerr << "argh! bad read! on message from " << sock << endl;
 	    perror(NULL);
 	    exit(0);
 	  }
@@ -38,11 +38,28 @@ bool blocking_get_prediction(int sock, prediction &p)
   return ret;
 }
 
-void send_prediction(int sock, prediction p)
+bool blocking_get_global_prediction(int sock, global_prediction &p)
+{
+  int count = really_read(sock, &p, sizeof(p));
+  bool ret = (count == sizeof(p));
+  return ret;
+}
+
+void send_prediction(int sock, prediction &p)
 {
   if (write(sock, &p, sizeof(p)) < (int)sizeof(p))
     {
       cerr << "argh! bad write! " << endl;
+      perror(NULL);
+      exit(0);
+    }
+}
+
+void send_global_prediction(int sock, global_prediction p)
+{
+  if (write(sock, &p, sizeof(p)) < (int)sizeof(p))
+    {
+      cerr << "argh! bad global write! " << sock << endl;
       perror(NULL);
       exit(0);
     }
@@ -53,16 +70,18 @@ void reset(partial_example &ex)
   ex.features.erase();
 }
 
+size_t num_finished = 0;
+  
 int receive_features(parser* p, void* ex)
 {
   example* ae = (example*)ex;
   io_buf* input = p->input;
   fd_set fds;
   FD_ZERO(&fds);
-  for (int* sock= input->files.begin; sock != input->files.end; sock++)
+  for (int* sock= input->files.begin; sock != input->files.end-num_finished; sock++)
     FD_SET(*sock,&fds);
-  
-  while (input->files.index() > 0)
+
+  while (input->files.index() > num_finished)
     {
       if (select(p->max_fd,&fds,NULL, NULL, NULL) == -1)
 	{
@@ -70,7 +89,7 @@ int receive_features(parser* p, void* ex)
 	  perror(NULL);
 	  exit (1);
 	}
-      for (int index = 0; index < (int)input->files.index(); index++)
+      for (int index = 0; index < (int)(input->files.index()-num_finished); index++)
 	{
 	  int sock = input->files[index];
 	  if (FD_ISSET(sock, &fds))
@@ -79,19 +98,16 @@ int receive_features(parser* p, void* ex)
 	      if (!blocking_get_prediction(sock, pre) )
 		{
 		  FD_CLR(sock, &fds);
-		  close(sock);
-		  memmove(input->files.begin+index,
-			  input->files.begin+index+1,
-			  (input->files.index() - index-1)*sizeof(int));
-		  input->files.pop();
-		  memmove(p->ids.begin+index, 
-			  p->ids.begin+index+1, 
-			  (p->ids.index() - index-1)*sizeof(size_t));
-		  p->ids.pop();
-		  memmove(p->counts.begin+index,
-			  p->counts.begin+index+1,
-			  (p->counts.index() - index-1)*sizeof(size_t));
-		  p->counts.pop();
+		  int swap_target = input->files.index()-num_finished-1;
+		  input->files[index]=input->files[swap_target];
+		  input->files[swap_target]=sock;
+		  int temp = p->ids[index];
+		  p->ids[index]=p->ids[swap_target];
+		  p->ids[swap_target] = temp;
+		  temp = p->counts[index];
+		  p->counts[index]=p->counts[swap_target];
+		  p->counts[swap_target] = temp;
+		  num_finished++;
 		  index--;
 		}
 	      else
@@ -99,7 +115,7 @@ int receive_features(parser* p, void* ex)
 		  if (pre.example_number != ++ (p->counts[index]))
 		    cout << "count is off! " << pre.example_number << " != " << p->counts[index] << 
 		      " for source " << index << " prediction = " << pre.p << endl;
-		  if (pre.example_number == p->finished_count + ring_size - 1)
+		  if (pre.example_number == p->finished_count + ring_size)
 		    FD_CLR(sock,&fds);//this ones to far ahead, let the buffer fill for awhile.
 		  size_t ring_index = pre.example_number % p->pes.index();
 		  if (p->pes[ring_index].features.index() == 0)
@@ -129,7 +145,7 @@ int receive_features(parser* p, void* ex)
 		    }
 		}
 	    }
-	  else  if (p->counts[index] < p->finished_count + ring_size -1)
+	  else  if (p->counts[index] < p->finished_count + ring_size)
 	    FD_SET(sock,&fds);
 	}
     }

@@ -1,3 +1,11 @@
+vowpal-wabbit (5.0-1) unstable; urgency=low
+
+  * New upstream release
+  * DEP-5 copyright file
+  * Boosted policy to 3.9.1 -- removed reference to BSD-3 file from copyright
+
+ -- Yaroslav Halchenko <debian@onerussian.com>  Sun, 05 Dec 2010 09:50:55 -0500
+
 vowpal-wabbit (4.1+20100420-1) unstable; urgency=low
 
   * Initial release (Closes: #576956)
