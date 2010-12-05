@@ -3,6 +3,7 @@ vowpal-wabbit (5.0-1) unstable; urgency=low
   * New upstream release
   * DEP-5 copyright file
   * Boosted policy to 3.9.1 -- removed reference to BSD-3 file from copyright
+  * Explicitely build vw.1 target
 
  -- Yaroslav Halchenko <debian@onerussian.com>  Sun, 05 Dec 2010 09:50:55 -0500
 
