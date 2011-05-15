@@ -24,11 +24,18 @@ void* gd_thread(void *in)
   regressor reg = params->reg;
   size_t thread_num = params->thread_num;
   example* ec = NULL;
+  size_t current_pass = 0;
 
   while ( true )
     {//this is a poor man's select operation.
       if ((ec = get_delay_example(thread_num)) != NULL)//nonblocking
 	{
+	  if (ec->pass != current_pass)
+	    {
+	      global.eta *= global.eta_decay_rate;
+	      current_pass = ec->pass;
+	    }
+	  
 	  inline_train(reg, ec, thread_num, ec->eta_round);
 	  finish_example(ec);
 	}
@@ -85,7 +92,7 @@ void finish_example(example* ec)
 
 void print_update(example *ec)
 {
-  if (global.weighted_examples > global.dump_interval && !global.quiet)
+  if (global.weighted_examples > global.dump_interval && !global.quiet && !global.conjugate_gradient)
     {
       label_data* ld = (label_data*) ec->ld;
       char label_buf[32];
@@ -301,14 +308,14 @@ void offset_quad_update(weight* weights, feature& page_feature, v_array<feature>
 void inline_train(regressor &reg, example* &ec, size_t thread_num, float update)
 {
   if (fabs(update)>0.)
-  {
-    size_t thread_mask = global.thread_mask;
-    if (global.adaptive)
     {
-      label_data* ld = (label_data*)ec->ld;
-      float g = reg.loss->getSquareGrad(ec->final_prediction, ld->label) * ld->weight;
-
-      //assert((g>0 && fabs(update)>0) || (g==0 && update==0));
+      size_t thread_mask = global.thread_mask;
+      if (global.adaptive)
+	{
+	  label_data* ld = (label_data*)ec->ld;
+	  float g = reg.loss->getSquareGrad(ec->final_prediction, ld->label) * ld->weight;
+	  
+	  //assert((g>0 && fabs(update)>0) || (g==0 && update==0));
       weight* weights = reg.weight_vectors[thread_num];
       for (size_t* i = ec->indices.begin; i != ec->indices.end; i++) 
       {
@@ -475,35 +482,32 @@ void local_predict(example* ec, gd_vars& vars, regressor& reg)
     print_audit_features(reg, ec);
 }
 
-float predict(regressor& r, example* ex, size_t thread_num, gd_vars& vars)
+void predict(regressor& r, example* ex, size_t thread_num, gd_vars& vars)
 {
   float prediction = inline_predict(r, ex, thread_num);
-  float final_pred = 0.;
 
   pthread_mutex_lock(&ex->lock);
 
   ex->partial_prediction += prediction;
-  if (--ex->threads_to_finish != 0)
-    {
-      while (!ex->done)
-	pthread_cond_wait(&ex->finished_sum, &ex->lock);
-      final_pred = ex->final_prediction;
-    }
-  else // We are the last thread using this example.
-    {
+  if (--ex->threads_to_finish == 0)
+    {//We are the last thread using this example
       local_predict(ex, vars,r);
       ex->done = true;
-
+      
       pthread_cond_broadcast(&ex->finished_sum);
-
+      
       if (global.training && ((label_data*)(ex->ld))->label != FLT_MAX)
 	delay_example(ex,global.num_threads());
       else
 	delay_example(ex,0);
-      final_pred = ex->final_prediction;
+    }
+  else if (global.training && ((label_data*)(ex->ld))->label != FLT_MAX)
+    //need to wait if there is training to do to keep example processing sequential
+    {
+      while (!ex->done)
+	pthread_cond_wait(&ex->finished_sum, &ex->lock);
     }
   pthread_mutex_unlock(&ex->lock);
-  return final_pred;
 }
 
 float offset_predict(regressor& r, example* ex, size_t thread_num, gd_vars& vars, size_t offset)

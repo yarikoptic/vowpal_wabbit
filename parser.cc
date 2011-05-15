@@ -40,6 +40,10 @@ size_t cache_numbits(io_buf* buf, int filepointer)
 {
   size_t v_length;
   buf->read_file(filepointer, (char*)&v_length, sizeof(v_length));
+  if(v_length>29){
+      cerr << "cache version too long, cache file is probably invalid" << endl;
+      exit(1);
+  }
   char t[v_length];
   buf->read_file(filepointer,t,v_length);
   if (strcmp(t,version.c_str()) != 0)
@@ -347,7 +351,10 @@ void parse_source_args(po::variables_map& vm, parser* par, bool quiet, size_t pa
 	}
     }
   if (passes > 1 && !par->resettable)
-    cerr << global.program_name << ": Warning only one pass will occur: try using --cache_file" << endl;  
+    {
+      cerr << global.program_name << ": need a cache file for multiple passes: try using --cache_file" << endl;  
+      exit(1);
+    }
   par->input->count = par->input->files.index();
   if (!quiet)
     cerr << "num sources = " << par->input->files.index() << endl;
@@ -451,12 +458,13 @@ example* get_unused_example()
       if (examples[parsed_index % ring_size].in_use == false)
 	{
 	  examples[parsed_index % ring_size].in_use = true;
-	  
 	  pthread_mutex_unlock(&examples_lock);
 	  return examples + (parsed_index % ring_size);
 	}
       else 
-	pthread_cond_wait(&example_unused, &examples_lock);
+	{
+	  pthread_cond_wait(&example_unused, &examples_lock);
+	}
       pthread_mutex_unlock(&examples_lock);
     }
 }
@@ -489,6 +497,7 @@ bool parse_atomic_example(parser* p, example *ae)
 
   ae->indices.erase();
   ae->tag.erase();
+  ae->sorted = false;
   if (p->reader(p,ae) <= 0)
     return false;
 
@@ -540,6 +549,18 @@ void setup_example(parser* p, example* ae)
   p->t += ae->global_weight;
   ae->example_t = p->t;
 
+  if (global.ignore_some)
+    {
+      for (size_t* i = ae->indices.begin; i != ae->indices.end; i++)
+	if (global.ignore[*i])
+	  {//delete namespace
+	    ae->atomics[*i].erase();
+	    memmove(i,i+1,ae->indices.end - (i+1));
+	    ae->indices.end--;
+	    i--;
+	  }
+    }
+
   //add constant feature
   size_t constant_namespace = 128;
   push(ae->indices,constant_namespace);
@@ -576,6 +597,7 @@ void setup_example(parser* p, example* ae)
 	  f = ret;
 	  current += expert_size;
 	}
+      assert(f == ae->atomics[*i].end);
       ae->num_features += ae->atomics[*i].end - ae->atomics[*i].begin;
       ae->total_sum_feat_sq += ae->sum_feat_sq[*i];
     }
@@ -611,9 +633,7 @@ void *main_parse_loop(void *in)
 	{
 	  reset_source(global.num_bits, p);
 	  global.passes_complete++;
-	  if (global.passes_complete < global.numpasses)
-	    global.eta *= global.eta_decay_rate;
-	  else
+	  if (global.passes_complete >= global.numpasses)
 	    {
 	      pthread_mutex_lock(&examples_lock);
 	      done = true;
@@ -657,7 +677,7 @@ example* get_example(size_t thread_num)
       cout << used_index[thread_num] << " " << parsed_index << " " << thread_num << " " << ring_index << endl;
     assert((examples+ring_index)->in_use);
     pthread_mutex_unlock(&examples_lock);
-    return examples + ring_index;
+     return examples + ring_index;
   }
   else {
     if (!done)

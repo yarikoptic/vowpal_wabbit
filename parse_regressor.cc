@@ -45,9 +45,9 @@ void initialize_regressor(regressor &r)
           for (size_t j = 0; j < stride*length/num_threads; j+=stride)
 	    {
 	      for (size_t k = 0; k < global.lda; k++) {
-                r.weight_vectors[i][j+k] = -log(drand48());
-                r.weight_vectors[i][j+k] *= r.weight_vectors[i][j+k];
-                r.weight_vectors[i][j+k] *= r.weight_vectors[i][j+k];
+                r.weight_vectors[i][j+k] = -log(drand48()) + 1.0;
+//                 r.weight_vectors[i][j+k] *= r.weight_vectors[i][j+k];
+//                 r.weight_vectors[i][j+k] *= r.weight_vectors[i][j+k];
 		r.weight_vectors[i][j+k] *= (float)global.lda_D / (float)global.lda
 		  / global.length() * 200;
               }
@@ -106,6 +106,7 @@ void parse_regressor_args(po::variables_map& vm, regressor& r, string& final_reg
       size_t local_num_bits;
       regressor.read((char *)&local_num_bits, sizeof(local_num_bits));
       if (!initialized){
+	global.default_bits = false;
 	global.num_bits = local_num_bits;
       }
       else 
@@ -248,7 +249,7 @@ void dump_regressor(string reg_name, regressor &r)
     {
       if (global.lda == 0)
 	{
-	  weight v = r.weight_vectors[i%num_threads][stride*i/num_threads];
+	  weight v = r.weight_vectors[i%num_threads][stride*(i/num_threads)];
 	  if (v != 0.)
 	    {      
 	      io_temp.write_file(f,(char *)&i, sizeof (i));
@@ -256,12 +257,20 @@ void dump_regressor(string reg_name, regressor &r)
 	    }
 	}
       else
-	for (size_t k = 0; k < global.lda; k++)
-	  {
-	    weight v = r.weight_vectors[i%num_threads][(stride*i+k)/num_threads];
-	    io_temp.write_file(f,(char *)&i, sizeof (i));
-	    io_temp.write_file(f,(char *)&v, sizeof (v));
-	  }
+	{
+	  size_t K;
+	  
+	  if (global.lda != 0)
+	    K = global.lda;
+	  
+	  for (size_t k = 0; k < K; k++)
+	    {
+	      weight v = r.weight_vectors[i%num_threads][(stride*i+k)/num_threads];
+	      uint32_t ndx = stride*i+k;
+	      io_temp.write_file(f,(char *)&ndx, sizeof (ndx));
+	      io_temp.write_file(f,(char *)&v, sizeof (v));
+	    }
+	}
     }
 
   rename(start_name.c_str(),reg_name.c_str());
