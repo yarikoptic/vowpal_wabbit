@@ -1,4 +1,11 @@
-vowpal-wabbit (5.1-1) unstable; urgency=low
+vowpal-wabbit (5.1+47-g3c756c1-1) unstable; urgency=low
+
+  * Fresh upstream snapshot
+  * Make failed tests verbose and allow some fuzz
+
+ -- Yaroslav Halchenko <debian@onerussian.com>  Fri, 03 Jun 2011 14:54:04 -0400
+
+vowpal-wabbit (5.1-1) UNRELEASED; urgency=low
 
   * New upstream release
 

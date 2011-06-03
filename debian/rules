@@ -13,3 +13,7 @@ override_dh_auto_build:
 	# See #544844 for more information on C*FLAGS-ignorance of dh
 	make FLAGS="-ffast-math -fno-strict-aliasing -D_FILE_OFFSET_BITS=64 $(CFLAGS)" \
 		 BOOST_INCLUDE=/usr/include BOOST_LIBRARY=/usr/lib all vw.1
+
+override_dh_auto_test:
+	: # I: run tests providing options for verbose output on failures
+	cd test && ./RunTests -c -d -f
