@@ -12,4 +12,4 @@ override_dh_auto_build:
 	# environment, which are set for noopt now in dpkg-buildpackage.
 	# See #544844 for more information on C*FLAGS-ignorance of dh
 	make FLAGS="-ffast-math -fno-strict-aliasing -D_FILE_OFFSET_BITS=64 $(CFLAGS)" \
-		 BOOST_LIBRARY=/usr/lib all vw.1
+		 BOOST_INCLUDE=/usr/include BOOST_LIBRARY=/usr/lib all vw.1
