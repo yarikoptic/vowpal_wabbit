@@ -38,6 +38,7 @@ struct global_data {
   
   size_t minibatch;
 
+  size_t pass_length;
   size_t numpasses;
   size_t passes_complete;
   size_t thread_mask; // 1 << num_bits >> thread_bits - 1.
@@ -63,6 +64,8 @@ struct global_data {
   float lda_alpha;
   float lda_rho;
   float lda_D;
+
+  string text_regressor_name;
 
   size_t num_threads () { return 1 << thread_bits; };
   size_t num_partitions () { return 1 << partition_bits; };
