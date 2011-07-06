@@ -1,3 +1,9 @@
+vowpal-wabbit (5.1+83-gffab10a-1) unstable; urgency=low
+
+  * Fresh upstream snapshot addressing LDA tests errors on 32bit
+
+ -- Yaroslav Halchenko <debian@onerussian.com>  Wed, 06 Jul 2011 18:18:26 -0400
+
 vowpal-wabbit (5.1+47-g3c756c1-1) unstable; urgency=low
 
   * Fresh upstream snapshot
