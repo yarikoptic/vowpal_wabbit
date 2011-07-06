@@ -1,6 +1,7 @@
 vowpal-wabbit (5.1+83-gffab10a-1) unstable; urgency=low
 
   * Fresh upstream snapshot addressing LDA tests errors on 32bit
+  * Boosted policy to 3.9.2 -- no changes due
 
  -- Yaroslav Halchenko <debian@onerussian.com>  Wed, 06 Jul 2011 18:18:26 -0400
 
