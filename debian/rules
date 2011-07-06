@@ -20,4 +20,4 @@ override_dh_auto_test:
 
 override_dh_auto_clean:
 	dh_auto_clean
-	-rm -f test/*.predict
+	-rm -f test/*.predict test/*.tmp
