@@ -1,3 +1,10 @@
+vowpal-wabbit (5.1+83-gffab10a-2) unstable; urgency=low
+
+  [ Cyril Brulebois ]
+  * Fix FTBFS with gcc 4.7 by fixing a bunch of missing includes (Closes: #667412).
+
+ -- Yaroslav Halchenko <debian@onerussian.com>  Wed, 04 Apr 2012 13:14:53 -0400
+
 vowpal-wabbit (5.1+83-gffab10a-1) unstable; urgency=low
 
   * Fresh upstream snapshot addressing LDA tests errors on 32bit
