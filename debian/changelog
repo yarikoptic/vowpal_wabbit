@@ -1,6 +1,7 @@
 vowpal-wabbit (6.1-1) unstable; urgency=low
 
   * New upstream release
+  * debian/copyright -- dep5
 
  -- Yaroslav Halchenko <debian@onerussian.com>  Fri, 29 Jun 2012 00:13:56 -0400
 

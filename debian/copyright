@@ -1,11 +1,17 @@
-Format-Specification: http://svn.debian.org/wsvn/dep/web/deps/dep5.mdwn?op=file&rev=135
-Name: vowpal-wabbit
-Maintainer: John Langford <http://hunch.net/~jl/>
+Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: vowpal-wabbit
+Upstream-Contact: John Langford <http://hunch.net/~jl/>
 Source: <http://github.com/JohnLangford/vowpal_wabbit>
 
 Files: *
-Copyright: 2009-2010, Yahoo! Inc
+Copyright: 2009-2012, Yahoo! Inc
            2004-2009, John Langford
+License: BSD-3
+
+Files: *
+Copyright: 2010-2012, Yaroslav Halchenko <debian@onerussian.com>
+License: BSD-3
+
 License: BSD-3
   Redistribution and use of this software in source and binary
   forms, with or without modification, are permitted provided that
@@ -23,7 +29,3 @@ License: BSD-3
     contributors may be used to endorse or promote products derived
     from this software without specific prior written permission of
     Yahoo! Inc.
-
-Files: *
-Copyright: 2010, Yaroslav Halchenko <debian@onerussian.com>
-License: BSD-3
