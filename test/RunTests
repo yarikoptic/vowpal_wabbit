@@ -8,7 +8,7 @@
 # See __DATA__ below for how to add more tests
 #
 use Getopt::Std;
-use vars qw($opt_d $opt_c $opt_e $opt_f $opt_o);
+use vars qw($opt_d $opt_c $opt_e $opt_f $opt_E $opt_o);
 
 my $Epsilon = 1e-4;
 
@@ -26,11 +26,12 @@ sub usage(@) {
         .  ..  \$PATH
 
     Options:
-        -c  print commands before running them
-        -d  print diff output on diff-failure
-        -e  Abort on first diff error
-        -f  Ignore small (< $Epsilon) floating-point differences (fuzzy compare)
-        -o  Overwrite reference file with new/different result
+        -c    print commands before running them
+        -d    print diff output on diff-failure
+        -e    Abort on first diff error
+        -f    Ignore small (< $Epsilon) floating-point differences (fuzzy compare)
+        -E<e> Set epsilon <e> for fuzzy floating-point compares (default $Epsilon)
+        -o    Overwrite reference file with new/different result
 ";
 }
 
@@ -69,7 +70,7 @@ sub which_lda() {
         }
     } elsif (@ARGV == 0 || @ARGV == 1) {
         foreach my $dir ('.', '..', split(':', $ENV{PATH})) {
-            my $exe = "$dir/lda";
+            my $exe = "$dir/vw";
             if (-x $exe) {
                 printf STDERR "Testing lda: %s\n", $exe;
                 return $exe;
@@ -81,7 +82,8 @@ sub which_lda() {
 
 sub init() {
     $0 =~ s{.*/}{};
-    getopts('cdefo') || usage();
+    getopts('cdefE:o') || usage();
+    $Epsilon = $opt_E if ($opt_E);
     $VW = which_vw();
     $LDA = which_lda();
 }
@@ -183,7 +185,7 @@ sub lenient_array_compare($$) {
         # There's some difference, is it significant?
         return 1 unless (looks_like_number($w1[$i]));        
         return 1 unless (looks_like_number($w2[$i]));        
-        my $delta = $w1[$i] - $w2[$i];
+        my $delta = abs($w1[$i] - $w2[$i]);
  
         return 1 if ($delta > $Epsilon);
     }
@@ -407,7 +409,7 @@ __DATA__
     train-sets/ref/0002.stderr
 
 # Test 5: add -q .., adaptive, and more (same input, different outputs)
-{VW} --initial_t 1 --power_t 0.5 --adaptive -q Tf -q ff -f models/0002a.model train-sets/0002.dat
+{VW} --initial_t 1 --power_t 0 --adaptive -q Tf -q ff -f models/0002a.model train-sets/0002.dat
     train-sets/ref/0002a.stdout
     train-sets/ref/0002a.stderr
 
@@ -419,7 +421,7 @@ __DATA__
     pred-sets/ref/0002b.predict
 
 # Test 7: using -q and multiple threads
-{VW} --adaptive -q ff -f models/0002c.model train-sets/0002.dat
+{VW} --power_t 0 --adaptive -q ff -f models/0002c.model train-sets/0002.dat
     train-sets/ref/0002c.stdout
     train-sets/ref/0002c.stderr
 

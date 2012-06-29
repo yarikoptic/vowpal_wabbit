@@ -32,7 +32,6 @@ struct parser {
   v_array<substring> name;
 
   const label_parser* lp;
-  float t;
 
   io_buf* input; //Input source(s)
   int (*reader)(parser* p, void* ae);
@@ -43,13 +42,15 @@ struct parser {
   bool sort_features;
   bool sorted_cache;
 
-  v_array<partial_example> pes;//partial examples
   v_array<size_t> ids; //unique ids for sources
   v_array<size_t> counts; //partial examples received from sources
   size_t finished_count;//the number of finished examples;
   int label_sock;
+  int bound_sock;
   int max_fd;
 };
+
+const size_t constant_namespace = 128;
 
 parser* new_parser(const label_parser* lp);
 #include <boost/program_options.hpp>
@@ -60,9 +61,9 @@ bool examples_to_finish();
 
 //parser control
 
-void start_parser(size_t num_threads, parser* pf);
+void start_parser(parser* pf);
 void end_parser(parser* pf);
-example* get_example(size_t thread_num);
+example* get_example();
 void free_example(example* ec);
 void make_example_available();
 bool parser_done();
