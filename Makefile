@@ -1,18 +1,30 @@
 COMPILER = g++
-LIBS = -l boost_program_options -l pthread -l z
-#LIBS = -l boost_program_options-gcc34 -l pthread -l z
+UNAME := $(shell uname)
+
+ifeq ($(UNAME), FreeBSD)
+LIBS = -l boost_program_options	-l pthread -l z -l compat
 BOOST_INCLUDE = /usr/local/include
 BOOST_LIBRARY = /usr/local/lib
+else
+LIBS = -l boost_program_options -l pthread -l z
+BOOST_INCLUDE = /usr/include
+BOOST_LIBRARY = /usr/local/lib
+endif
 
-ARCH = -march=nocona
-OPTIM_FLAGS = -O3 -fomit-frame-pointer -ffast-math -fno-strict-aliasing 
-WARN_FLAGS = -Wall #-Werror 
+ARCH = $(shell test `g++ -v 2>&1 | tail -1 | cut -d ' ' -f 3 | cut -d '.' -f 1,2` \< 4.3 && echo -march=nocona || echo -march=native)
+
+#LIBS = -l boost_program_options-gcc34 -l pthread -l z
+
+OPTIM_FLAGS = -O3 -fomit-frame-pointer -ffast-math -fno-strict-aliasing
+ifeq ($(UNAME), FreeBSD)
+
+WARN_FLAGS = -Wall
+else
+WARN_FLAGS = -Wall -pedantic
+endif
 
 # for normal fast execution.
 FLAGS = $(ARCH) $(WARN_FLAGS) $(OPTIM_FLAGS) -D_FILE_OFFSET_BITS=64 -I $(BOOST_INCLUDE) #-DVW_LDA_NO_SSE
-
-# for parallelization
-#FLAGS = -Wall $(ARCH) -ffast-math -Wno-strict-aliasing -D_FILE_OFFSET_BITS=64 -I $(BOOST_INCLUDE) -O3 -fopenmp
 
 # for profiling
 #FLAGS = -Wall $(ARCH) -ffast-math -D_FILE_OFFSET_BITS=64 -I $(BOOST_INCLUDE) -pg -g
@@ -20,60 +32,33 @@ FLAGS = $(ARCH) $(WARN_FLAGS) $(OPTIM_FLAGS) -D_FILE_OFFSET_BITS=64 -I $(BOOST_I
 # for valgrind
 #FLAGS = -Wall $(ARCH) -ffast-math -D_FILE_OFFSET_BITS=64 -I $(BOOST_INCLUDE) -g -O0
 
-BINARIES = vw allreduce_master active_interactor lda
+BINARIES = vw active_interactor
 MANPAGES = vw.1
 
-#all:	$(BINARIES) $(MANPAGES)
-all:	$(BINARIES)
+all:	vw spanning_tree library_example
 
 %.1:	%
 	help2man --no-info --name="Vowpal Wabbit -- fast online learning tool" ./$< > $@
 
-vw.o:	 parse_example.h  parse_regressor.h  parse_args.h  parser.h
+export
 
-offset_tree.o:	parse_example.h parse_regressor.h parse_args.h parser.h
+spanning_tree: 
+	cd cluster; $(MAKE); cd ..
 
-parse_args.o:	 parse_regressor.h  parse_example.h  io.h  comp_io.h gd.h
+vw:
+	cd vowpalwabbit; $(MAKE); cd ..
 
-parse_example.o:  io.h  comp_io.h  parse_example.cc  parser.h
-
-sender.o: parse_example.h
-
-cache.o:	 parser.h
-
-sparse_dense.o:	 parse_example.h
-
-gd.o:	 parse_example.h
-
-%.o:	 %.cc  %.h
-	$(COMPILER) $(FLAGS) -c $< -o $@
-
-%.o:	 %.cc
-	$(COMPILER) $(FLAGS) -c $< -o $@
-
-allreduce_master: allreduce_master.o
-	$(COMPILER) $(FLAGS) -o $@ $+ 
-
-vw: hash.o  global_data.o delay_ring.o message_relay.o io.o parse_regressor.o  parse_primitives.o unique_sort.o cache.o simple_label.o parse_example.o multisource.o sparse_dense.o  network.o parse_args.o gd.o allreduce.o cg.o noop.o parser.o vw.o loss_functions.o sender.o main.o
-	$(COMPILER) $(FLAGS) -L$(BOOST_LIBRARY) -o $@ $+ $(LIBS)
-
-lda: hash.o  global_data.o delay_ring.o message_relay.o io.o parse_regressor.o  parse_primitives.o unique_sort.o cache.o simple_label.o parse_example.o multisource.o sparse_dense.o  network.o parse_args.o gd.o lda_core.o noop.o parser.o loss_functions.o sender.o lda.o
-	$(COMPILER) $(FLAGS) -L$(BOOST_LIBRARY) -o $@ $+ $(LIBS)
-
-active_interactor:	active_interactor.cc
-	$(COMPILER) $(FLAGS) -o $@ $+
-
-offset_tree: 	hash.o io.o parse_regressor.o parse_primitives.o cache.o sparse_dense.o parse_example.o parse_args.o gd.o parser.o offset_tree.o loss_functions.o
-	$(COMPILER) $(FLAGS) -L$(BOOST_LIBRARY) -o $@ $+ $(LIBS)
+library_example: vw
+	cd library; $(MAKE); cd ..
 
 .FORCE:
 
 test: .FORCE
 	@echo "vw running test-suite..."
-	@(cd test && ./RunTests ../vw ../lda)
+	@(cd test && ./RunTests -f -E 0.001 ../vowpalwabbit/vw ../vowpalwabbit/vw)
 
-install: vw
-	cp $(BINARIES) /usr/local/bin
+install: $(BINARIES)
+	cp $(BINARIES) /usr/local/bin; cd cluster; $(MAKE) install
 
 clean:
-	rm -f  *.o $(BINARIES) *~ $(MANPAGES)
+	cd vowpalwabbit; $(MAKE) clean; cd ..; cd cluster; $(MAKE) clean; cd ..
