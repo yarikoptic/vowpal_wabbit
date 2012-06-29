@@ -1,6 +1,7 @@
 vowpal-wabbit (6.1+git255-g38734e4-1) unstable; urgency=low
 
   * New upstream snapshot from origin/master at 6.1-255-g38734e4
+  * debian/copyright -- dep5
 
  -- Yaroslav Halchenko <debian@onerussian.com>  Thu, 28 Jun 2012 23:57:31 -0400
 
