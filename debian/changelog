@@ -2,6 +2,8 @@ vowpal-wabbit (6.1-1) unstable; urgency=low
 
   * New upstream release
   * debian/copyright -- dep5
+  * debian/patches/fix-ftbfs-with-gcc-4.7 -- dropped, upstream is gcc 4.7
+    compatible now
 
  -- Yaroslav Halchenko <debian@onerussian.com>  Fri, 29 Jun 2012 00:13:56 -0400
 
