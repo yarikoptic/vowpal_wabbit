@@ -6,6 +6,7 @@ vowpal-wabbit (6.1-1) unstable; urgency=low
     compatible now
   * debian/watch -- adjusted for github changes
   * debian/rules -- remove depend upon clean
+  * debian/vowpal-wabbit.examples -- no cluster_command any longer 
 
  -- Yaroslav Halchenko <debian@onerussian.com>  Fri, 29 Jun 2012 00:13:56 -0400
 
