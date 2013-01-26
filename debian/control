@@ -11,6 +11,7 @@ Vcs-Git: git://github.com/yarikoptic/vowpal_wabbit.git
 Package: vowpal-wabbit
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}, libvw0 (= ${binary:Version})
+Suggests: vowpal-wabbit-doc
 Description: fast and scalable online machine learning algorithm
  Vowpal Wabbit is a fast online machine learning algorithm. The core
  algorithm is specialist gradient descent (GD) on a loss function
@@ -70,3 +71,20 @@ Description: fast and scalable online machine learning algorithm - debug files
  .
  This package contains debug symbols for the binaries shipped by vowpal-wabbit
  packages.
+
+Package: vowpal-wabbit-doc
+Section: doc
+Architecture: all
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Recommends: vowpal-wabbit
+Description: fast and scalable online machine learning algorithm - documentation
+ Vowpal Wabbit is a fast online machine learning algorithm. The core
+ algorithm is specialist gradient descent (GD) on a loss function
+ (several are available). VW features:
+  - flexible input data specification
+  - speedy learning
+  - scalability (bounded memory footprint, suitable for distributed
+    computation)
+  - feature pairing
+ .
+ This package contains examples (tests) for vowpal-wabbit.
