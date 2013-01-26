@@ -2,6 +2,8 @@ vowpal-wabbit (7.1-1) experimental; urgency=low
 
   * New upstream release (Closes: #699020)
     - install active_interactor utility
+    - provides core functionality in a dynamic library, thus splitting
+      packaging into multiple binary packages
   * debian/copyright
     - updated years
     - added Microsoft Corp to copyright holders

@@ -3,15 +3,14 @@ Section: science
 Priority: optional
 Maintainer: Yaroslav Halchenko <debian@onerussian.com>
 Build-Depends: debhelper (>= 7.0.50~), libboost-program-options-dev, help2man, zlib1g-dev
-Standards-Version: 3.9.2
+Standards-Version: 3.9.3
 Homepage: http://hunch.net/~vw/
 Vcs-Browser: http://github.com/yarikoptic/vowpal_wabbit
 Vcs-Git: git://github.com/yarikoptic/vowpal_wabbit.git
 
-
 Package: vowpal-wabbit
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}
+Depends: ${shlibs:Depends}, ${misc:Depends}, libvw0 (= ${binary:Version})
 Description: fast and scalable online machine learning algorithm
  Vowpal Wabbit is a fast online machine learning algorithm. The core
  algorithm is specialist gradient descent (GD) on a loss function
@@ -21,3 +20,53 @@ Description: fast and scalable online machine learning algorithm
   - scalability (bounded memory footprint, suitable for distributed
     computation)
   - feature pairing
+
+Package: libvw0
+Section: libs
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: fast and scalable online machine learning algorithm - dynamic library
+ Vowpal Wabbit is a fast online machine learning algorithm. The core
+ algorithm is specialist gradient descent (GD) on a loss function
+ (several are available). VW features:
+  - flexible input data specification
+  - speedy learning
+  - scalability (bounded memory footprint, suitable for distributed
+    computation)
+  - feature pairing
+ .
+ This package contains vowpal-wabbit's dynamic libraries libraries.
+
+Package: libvw-dev
+Section: libdevel
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, libvw0 (= ${binary:Version})
+Description: fast and scalable online machine learning algorithm - development files
+ Vowpal Wabbit is a fast online machine learning algorithm. The core
+ algorithm is specialist gradient descent (GD) on a loss function
+ (several are available). VW features:
+  - flexible input data specification
+  - speedy learning
+  - scalability (bounded memory footprint, suitable for distributed
+    computation)
+  - feature pairing
+ .
+ This package contains development files needed to compile and link programs
+ which use vowpal-wabbit's libraries.
+
+Package: vowpal-wabbit-dbg
+Section: debug
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, vowpal-wabbit (= ${binary:Version})
+Description: fast and scalable online machine learning algorithm - debug files
+ Vowpal Wabbit is a fast online machine learning algorithm. The core
+ algorithm is specialist gradient descent (GD) on a loss function
+ (several are available). VW features:
+  - flexible input data specification
+  - speedy learning
+  - scalability (bounded memory footprint, suitable for distributed
+    computation)
+  - feature pairing
+ .
+ This package contains debug symbols for the binaries shipped by vowpal-wabbit
+ packages.

@@ -13,6 +13,11 @@ override_dh_auto_build:
 	dh_auto_build
 	debian/rules $(MANPAGES)
 
+override_dh_auto_install:
+	dh_auto_install
+	: # We generally do not ship .la on Debian systems
+	find debian/ -name '*.la' | xargs -r rm -f
+
 override_dh_auto_test:
 	: # I: run tests providing options for verbose output on failures
 	cd test && ./RunTests -c -d -f
@@ -20,3 +25,6 @@ override_dh_auto_test:
 override_dh_auto_clean:
 	dh_auto_clean
 	-rm -f test/*.predict test/*.tmp depend $(MANPAGES)
+
+override_dh_strip:
+	dh_strip --dbg-package=vowpal-wabbit-dbg
