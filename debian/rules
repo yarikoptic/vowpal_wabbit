@@ -1,18 +1,17 @@
 #!/usr/bin/make -f
 # -*- makefile -*-
 
+MANPAGES=vowpalwabbit/vw.1
+
 %:
 	dh  $@  --with autoreconf
 
-override_dh_auto_install:
-	# do nothing -- make install is using ~/bin
+%.1: %
+	help2man --no-info --name="Vowpal Wabbit -- fast online learning tool" ./$< > $@
 
 override_dh_auto_build:
-	# provide custom FLAGS to build taking into account CFLAGS in the
-	# environment, which are set for noopt now in dpkg-buildpackage.
-	# See #544844 for more information on C*FLAGS-ignorance of dh
-	make FLAGS="-ffast-math -fno-strict-aliasing -D_FILE_OFFSET_BITS=64 $(CFLAGS)" \
-		 BOOST_INCLUDE=/usr/include BOOST_LIBRARY=/usr/lib all vowpalwabbit/vw.1
+	dh_auto_build
+	debian/rules $(MANPAGES)
 
 override_dh_auto_test:
 	: # I: run tests providing options for verbose output on failures
@@ -20,4 +19,4 @@ override_dh_auto_test:
 
 override_dh_auto_clean:
 	dh_auto_clean
-	-rm -f test/*.predict test/*.tmp depend
+	-rm -f test/*.predict test/*.tmp depend $(MANPAGES)
