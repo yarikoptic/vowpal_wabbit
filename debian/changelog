@@ -8,6 +8,10 @@ vowpal-wabbit (7.1-1) experimental; urgency=low
     - expanded BSD-3 license text with disclaimers
   * debian/rules
     - use dh_autoreconf -- upstream uses autotools now for the releases 
+  * debian/patches
+    - dropped fix-ftbfs-with-gcc-4.7 -- upstream is ready for gcc 4.7
+    - CP post-release changeset_5046679437b058e82e31f42be2a41a70e30e9d7a.diff
+      to resolve FTBFS
 
  -- Yaroslav Halchenko <debian@onerussian.com>  Sat, 26 Jan 2013 12:28:24 -0500
 
