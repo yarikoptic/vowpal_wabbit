@@ -17,6 +17,8 @@ override_dh_auto_install:
 	dh_auto_install
 	: # We generally do not ship .la on Debian systems
 	find debian/ -name '*.la' | xargs -r rm -f
+	: # Change permissions on windows-generated files
+	find debian/ -name '*-mswin' -type f | xargs -r chmod a-x
 
 override_dh_auto_test:
 	: # I: run tests providing options for verbose output on failures

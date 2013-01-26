@@ -2,7 +2,11 @@ Source: vowpal-wabbit
 Section: science
 Priority: optional
 Maintainer: Yaroslav Halchenko <debian@onerussian.com>
-Build-Depends: debhelper (>= 7.0.50~), libboost-program-options-dev, help2man, zlib1g-dev
+Build-Depends: debhelper (>= 7.0.50~),
+               dh-autoreconf,
+               libboost-program-options-dev,
+               help2man,
+               zlib1g-dev
 Standards-Version: 3.9.3
 Homepage: http://hunch.net/~vw/
 Vcs-Browser: http://github.com/yarikoptic/vowpal_wabbit
@@ -36,7 +40,7 @@ Description: fast and scalable online machine learning algorithm - dynamic libra
     computation)
   - feature pairing
  .
- This package contains vowpal-wabbit's dynamic libraries libraries.
+ This package contains vowpal-wabbit's dynamic libraries.
 
 Package: libvw-dev
 Section: libdevel
@@ -57,6 +61,7 @@ Description: fast and scalable online machine learning algorithm - development f
 
 Package: vowpal-wabbit-dbg
 Section: debug
+Priority: extra
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}, vowpal-wabbit (= ${binary:Version})
 Description: fast and scalable online machine learning algorithm - debug files
