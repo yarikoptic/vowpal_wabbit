@@ -1,0 +1,21 @@
+From: Yaroslav Halchenko <debian@onerussian.com>
+Subject: Force addition of -lpthread to PTHREAD_LIBS if thread library found
+Origin:  Debian
+Last-Update: 2013-01-26
+
+--- a/configure.ac
++++ b/configure.ac
+@@ -28,7 +28,12 @@ ZLIB_LDFLAGS="-L${ZLIB_HOME}/lib -lz"
+ AC_SUBST(ZLIB_CPPFLAGS)
+ AC_SUBST(ZLIB_LDFLAGS)
+ 
+-AX_PTHREAD([], [
++dnl yoh@debian.org
++dnl AX_PTHREADS leaves PTHREADS_LIBS empty while only adding -pthreads to CFLAGS
++dnl We do need -lpthread
++AX_PTHREAD([
++  PTHREAD_LIBS="-lpthread"
++], [
+   AC_MSG_ERROR([Could not find posix thread library.])
+ ])
+ 
