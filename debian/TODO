@@ -1,9 +1,8 @@
 vowpal-wabbit for Debian
 ------------------------
 
-* Discuss with upstream the possibility of creating a shared library
-  version of the vw
+* Package/expose vw shared library
 
-* Python bindings for the library above ;)
+* Persuade Wes&Gael to furnish Python bindings for the library above ;)
 
- -- Yaroslav Halchenko <debian@onerussian.com>, Thu,  8 Apr 2010 14:50:46 -0400
+ -- Yaroslav Halchenko <debian@onerussian.com>  Sat, 26 Jan 2013 12:28:24 -0500
