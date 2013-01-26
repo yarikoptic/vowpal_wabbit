@@ -6,6 +6,8 @@ vowpal-wabbit (7.1-1) experimental; urgency=low
     - updated years
     - added Microsoft Corp to copyright holders
     - expanded BSD-3 license text with disclaimers
+  * debian/rules
+    - use dh_autoreconf -- upstream uses autotools now for the releases 
 
  -- Yaroslav Halchenko <debian@onerussian.com>  Sat, 26 Jan 2013 12:28:24 -0500
 
