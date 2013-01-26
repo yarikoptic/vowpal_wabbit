@@ -9,6 +9,9 @@ MANPAGES=vowpalwabbit/vw.1
 %.1: %
 	help2man --no-info --name="Vowpal Wabbit -- fast online learning tool" ./$< > $@
 
+override_dh_auto_configure:
+	dh_auto_configure -- $(shell dpkg-buildflags --export=configure)
+
 override_dh_auto_build:
 	dh_auto_build
 	debian/rules $(MANPAGES)
