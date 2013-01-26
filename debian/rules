@@ -17,12 +17,13 @@ override_dh_auto_install:
 	dh_auto_install
 	: # We generally do not ship .la on Debian systems
 	find debian/ -name '*.la' | xargs -r rm -f
-	: # No tmp files produced by tests
-	find debian/ -name '*.tmp' -o -name '*.cache' | xargs -r rm -f
 
 override_dh_auto_test:
 	: # I: run tests providing options for verbose output on failures
 	cd test && ./RunTests -c -d -f
+	: # I: cleaning up after running tests
+	find test/ -name '*.tmp' -o -name '*.cache' | xargs -r rm -f
+	rm -f test/*.predict
 
 override_dh_auto_clean:
 	dh_auto_clean
