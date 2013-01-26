@@ -1,1 +1,2 @@
-vw usr/bin
+vowpalwabbit/vw usr/bin
+vowpalwabbit/active_interactor usr/bin
