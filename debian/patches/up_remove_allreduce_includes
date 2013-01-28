@@ -1,0 +1,40 @@
+--- a/vowpalwabbit/accumulate.cc
++++ b/vowpalwabbit/accumulate.cc
+@@ -12,6 +12,7 @@ Alekh Agarwal and John Langford, with he
+ #include <sys/timeb.h>
+ #include <cmath>
+ #include <stdint.h>
++#include "allreduce.h"
+ #include "accumulate.h"
+ #include "global_data.h"
+    
+--- a/vowpalwabbit/accumulate.h
++++ b/vowpalwabbit/accumulate.h
+@@ -7,7 +7,6 @@ license as described in the file LICENSE
+ #ifndef ACCUMULATE_H
+ #define ACCUMULATE_H
+ 
+-#include "allreduce.h"
+ #include "global_data.h"
+ 
+ void accumulate(vw& all, std::string master_location, regressor& reg, size_t o);
+--- a/vowpalwabbit/gd.cc
++++ b/vowpalwabbit/gd.cc
+@@ -25,7 +25,6 @@ license as described in the file LICENSE
+ #include "gd.h"
+ #include "cache.h"
+ #include "simple_label.h"
+-#include "allreduce.h"
+ #include "accumulate.h"
+ 
+ using namespace std;
+--- a/vowpalwabbit/gd.h
++++ b/vowpalwabbit/gd.h
+@@ -14,7 +14,6 @@ license as described in the file LICENSE
+ #include "example.h"
+ #include "parse_regressor.h"
+ #include "parser.h"
+-#include "allreduce.h"
+ 
+ void print_result(int f, float res, v_array<char> tag);
+ 
