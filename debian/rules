@@ -20,6 +20,9 @@ override_dh_auto_install:
 	dh_auto_install
 	: # We generally do not ship .la on Debian systems
 	find debian/ -name '*.la' | xargs -r rm -f
+	: # We do not patch upstream to not build it (useful to test)
+	: # put it makes no sense to install it
+	find debian/ -name library_example -delete
 
 override_dh_installexamples:
 	dh_installexamples
