@@ -17,7 +17,8 @@ vowpal-wabbit (7.1-1) experimental; urgency=low
       to resolve FTBFS
     - added deb_lpthread patch to enforce addition of -lpthread
     - added up_remove_allreduce_includes to avoid exposing all_reduce in libvw
-      defined in liballreduce.so
+      defined in liballreduce.so, and up_ld_vw_against_allreduce to correctly
+      link libvw against allreduce library
 
  -- Yaroslav Halchenko <debian@onerussian.com>  Sat, 26 Jan 2013 12:28:24 -0500
 
