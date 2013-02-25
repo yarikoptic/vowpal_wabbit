@@ -1,5 +1,2 @@
 changeset_3a3ef22f1ffda104a320aec4f67f300ad631a438.diff
 deb_lpthread
-up_no_double_allreduce_h
-up_remove_allreduce_includes
-up_ld_vw_against_allreduce

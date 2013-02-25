@@ -1,6 +1,10 @@
 vowpal-wabbit (7.2-1) experimental; urgency=low
 
   * Fresh upstream release + post-release bugfix for parallel code [3a3ef22]
+    - patches up_no_double_allreduce_h, up_remove_allreduce_includes,
+      up_ld_vw_against_allreduce,
+      changeset_5046679437b058e82e31f42be2a41a70e30e9d7a.diff
+      removed (included upstream)
 
  -- Yaroslav Halchenko <debian@onerussian.com>  Mon, 25 Feb 2013 09:46:38 -0500
 
