@@ -10,8 +10,18 @@ license as described in the file LICENSE.
 #include <stdint.h>
 #include <math.h>
 #include "v_array.h"
-#include "io.h"
+#include "io_buf.h"
 #include "example.h"
+
+#ifdef _WIN32
+#include <WinSock2.h>
+#include <Windows.h>
+typedef CRITICAL_SECTION MUTEX;
+typedef CONDITION_VARIABLE CV;
+#else
+typedef pthread_mutex_t MUTEX;
+typedef pthread_cond_t CV;
+#endif
 
 struct substring {
   char *begin;
@@ -51,6 +61,7 @@ struct label_parser {
   void (*delete_label)(void*);
   float (*get_weight)(void*);
   float (*get_initial)(void*);
+  void (*copy_label)(void*&,void*); // copy_label(dst,src) performs a DEEP copy of src into dst (dst is allocated correctly).  if this function is NULL, then we assume that a memcpy of size label_size is sufficient, so you need only specify this function if your label constains, for instance, pointers (otherwise you'll get double-free errors)
   size_t label_size;
 };
 
@@ -73,6 +84,16 @@ struct parser {
   size_t ring_size;
   uint64_t parsed_examples; // The index of the parsed example.
   uint64_t local_example_number; 
+  example* examples;
+  uint64_t used_index;
+  MUTEX examples_lock;
+  CV example_available;
+  CV example_unused;
+  MUTEX output_lock;
+  CV output_done;
+
+  bool done;
+  v_array<size_t> gram_mask;
 
   v_array<size_t> ids; //unique ids for sources
   v_array<size_t> counts; //partial examples received from sources

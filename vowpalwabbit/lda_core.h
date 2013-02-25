@@ -6,7 +6,8 @@ license as described in the file LICENSE.
 #ifndef LDA_CORE_H
 #define LDA_CORE_H
 
-void drive_lda(void*);
-void lda_parse_flags(vw&, std::vector<std::string>&, po::variables_map&);
+namespace LDA{
+  void parse_flags(vw&, std::vector<std::string>&, po::variables_map&);
+}
 
 #endif

@@ -6,7 +6,7 @@ license as described in the file LICENSE.
 #ifndef SCE
 #define SCE
 
-#include "io.h"
+#include "io_buf.h"
 #include "parse_primitives.h"
 #include "example.h"
 
@@ -27,10 +27,11 @@ bool examples_to_finish();
 //only call these from the library form:
 void initialize_parser_datastructures(vw& all);
 void release_parser_datastructures(vw& all);
+void adjust_used_index(vw& all);
 
 //parser control
 
-void start_parser(vw& all);
+void start_parser(vw& all, bool do_init = true);
 void end_parser(vw& all);
 example* get_example(parser* pf);
 namespace VW {

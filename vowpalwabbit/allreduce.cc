@@ -11,26 +11,7 @@ Alekh Agarwal and John Langford, with help Olivier Chapelle.
 #include <cstdio>
 #include <cmath>
 #include <ctime>
-#ifdef _WIN32
-#include <WinSock2.h>
-#include <WS2tcpip.h>
-typedef unsigned int uint32_t;
-typedef unsigned short uint16_t;
-typedef int socklen_t;
-typedef SOCKET socket_t;
-#define SHUT_RDWR SD_BOTH
-#else
-#include <sys/socket.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <netdb.h>
-typedef int socket_t;
-#endif
 #include <errno.h>
-#ifndef _WIN32
-#include <strings.h>
-#endif
 #include <string.h>
 #include <stdlib.h>
 #ifdef _WIN32
@@ -41,21 +22,9 @@ typedef int socket_t;
 #include <sys/timeb.h>
 #include "allreduce.h"
 
- //nonreentrant
-
 using namespace std;
 
-struct node_socks {
-  socket_t parent;
-  socket_t children[2];
-  ~node_socks();
-};
-
 const int buf_size = 1<<16;
-
-string current_master="";
-
-node_socks socks;
 
 // port is already in network order
 socket_t sock_connect(const uint32_t ip, const int port) {
@@ -64,7 +33,7 @@ socket_t sock_connect(const uint32_t ip, const int port) {
   if (sock == -1)
     {
       cerr << "can't get socket " << endl;
-      exit(1);
+	  throw exception();
     }
   sockaddr_in far_end;
   far_end.sin_family = AF_INET;
@@ -97,7 +66,7 @@ socket_t sock_connect(const uint32_t ip, const int port) {
     }
     cerr << ':' << ntohs(port) << endl;
     perror(NULL);
-    exit(1);
+    throw exception();
   }
   return sock;
 }
@@ -107,7 +76,7 @@ socket_t getsock()
   socket_t sock = socket(PF_INET, SOCK_STREAM, 0);
   if (sock < 0) {
       cerr << "can't open socket!" << endl;
-      exit(1);
+      throw exception();
   }
 
   // SO_REUSEADDR will allow port rebinding on Windows, causing multiple instances
@@ -120,7 +89,7 @@ socket_t getsock()
   return sock;
 }
 
-void all_reduce_init(const string master_location, const size_t unique_id, const size_t total, const size_t node)
+void all_reduce_init(const string master_location, const size_t unique_id, const size_t total, const size_t node, node_socks& socks)
 {
 #ifdef _WIN32
   WSAData wsaData;
@@ -132,9 +101,9 @@ void all_reduce_init(const string master_location, const size_t unique_id, const
 
   if (master == NULL) {
     cerr << "can't resolve hostname: " << master_location << endl;
-    exit(1);
+    throw exception();
   }
-  current_master = master_location;
+  socks.current_master = master_location;
 
   uint32_t master_ip = * ((uint32_t*)master->h_addr);
   int port = 26543;
@@ -151,7 +120,7 @@ void all_reduce_init(const string master_location, const size_t unique_id, const
     cerr << "read 1 failed!" << endl;
   if (!ok) {
     cerr << "mapper already connected" << endl;
-    exit(1);
+    throw exception();
   }
 
   uint16_t kid_count;
@@ -187,7 +156,7 @@ void all_reduce_init(const string master_location, const size_t unique_id, const
         else
         {
           perror("Bind failed ");
-          exit(1);
+          throw exception();
         }
       }
       else
@@ -231,7 +200,7 @@ void all_reduce_init(const string master_location, const size_t unique_id, const
     if (f < 0)
     {
       cerr << "bad client socket!" << endl;
-      exit (1);
+      throw exception();
     }
     socks.children[i] = f;
   }
@@ -317,11 +286,11 @@ void reduce(char* buffer, const int n, const socket_t parent_sock, const socket_
       //      cout<<"Before select parent_sent_pos = "<<parent_sent_pos<<" child_read_pos[0] = "<<child_read_pos[0]<<" max fd = "<<max_fd<<endl;
       
       if(child_read_pos[0] < n || child_read_pos[1] < n) {
-	if (max_fd > 0 && select(max_fd,&fds,NULL, NULL, NULL) == -1)
+	if (max_fd > 0 && select((int)max_fd,&fds,NULL, NULL, NULL) == -1)
 	  {
 	    cerr << "Select failed!" << endl;
 	    perror(NULL);
-	    exit (1);
+	    throw exception();
 	  }
       
 	for(int i = 0;i < 2;i++) {
@@ -330,17 +299,17 @@ void reduce(char* buffer, const int n, const socket_t parent_sock, const socket_
 	    if(child_read_pos[i] == n) {
 	      cerr<<"I think child has no data to send but he thinks he has "<<FD_ISSET(child_sockets[0],&fds)<<" "<<FD_ISSET(child_sockets[1],&fds)<<endl;
 	      fflush(stderr);
-	      exit(1);
+	      throw exception();
 	    }
 	  
 	
 	    //float read_buf[buf_size];
 	    size_t count = min(buf_size,n - child_read_pos[i]);
-	    int read_size = recv(child_sockets[i], child_read_buf[i] + child_unprocessed[i], count, 0);
+	    int read_size = recv(child_sockets[i], child_read_buf[i] + child_unprocessed[i], (int)count, 0);
 	    if(read_size == -1) {
 	      cerr <<" Read from child failed\n";
 	      perror(NULL);
-	      exit(1);
+	      throw exception();
 	    }
 	    
 	    //cout<<"Read "<<read_size<<" bytes\n";
@@ -405,10 +374,10 @@ void broadcast(char* buffer, const int n, const socket_t parent_sock, const sock
 	//there is data to be read from the parent
 	if(parent_read_pos == n) {
 	  cerr<<"I think parent has no data to send but he thinks he has\n";
-	  exit(1);
+	  throw exception();
 	}
 	size_t count = min(buf_size,n-parent_read_pos);
-	int read_size = recv(parent_sock, buffer + parent_read_pos, count, 0);
+	int read_size = recv(parent_sock, buffer + parent_read_pos, (int)count, 0);
 	if(read_size == -1) {
 	  cerr <<" Read from parent failed\n";
 	  perror(NULL);
@@ -418,22 +387,11 @@ void broadcast(char* buffer, const int n, const socket_t parent_sock, const sock
     }
 }
 
-void all_reduce(float* buffer, const int n, const string master_location, const size_t unique_id, const size_t total, const size_t node) 
+void all_reduce(float* buffer, const int n, const string master_location, const size_t unique_id, const size_t total, const size_t node, node_socks& socks) 
 {
-  if(master_location != current_master) 
-    all_reduce_init(master_location, unique_id, total, node);
+  if(master_location != socks.current_master) 
+    all_reduce_init(master_location, unique_id, total, node, socks);
   reduce((char*)buffer, n*sizeof(float), socks.parent, socks.children);
   broadcast((char*)buffer, n*sizeof(float), socks.parent, socks.children);
 }
 
-node_socks::~node_socks()
-{
-  if(current_master != "") {
-    if(this->parent != -1)
-      shutdown(this->parent, SHUT_RDWR);
-    if(this->children[0] != -1) 
-      shutdown(this->children[0], SHUT_RDWR);
-    if(this->children[1] != -1)
-      shutdown(this->children[1], SHUT_RDWR);  
-  }
-}

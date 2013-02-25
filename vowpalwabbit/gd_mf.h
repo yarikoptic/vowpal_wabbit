@@ -12,6 +12,7 @@ license as described in the file LICENSE.
 #include "parser.h"
 #include "gd.h"
 
-void drive_gd_mf(void*);
-
+namespace GDMF{
+  void parse_flags(vw& all);
+}
 #endif

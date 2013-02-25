@@ -30,14 +30,12 @@
 #if defined(_MSC_VER)                       // Microsoft Visual Studio
 #   include <stdint.h>
 
-#   define FORCE_INLINE __forceinline
 #   include <stdlib.h>
 #   define ROTL32(x,y)  _rotl(x,y)
 #   define BIG_CONSTANT(x) (x)
 
 #else                                       // Other compilers
 #   include <stdint.h>   /* defines uint32_t etc */
-#   define FORCE_INLINE	__attribute__((always_inline))
 
     inline uint32_t rotl32 (uint32_t x, int8_t r)
     {
@@ -53,7 +51,7 @@
 // Block read - if your platform needs to do endian-swapping or can only
 // handle aligned reads, do the conversion here
 
-FORCE_INLINE uint32_t getblock (const uint32_t * p, int i)
+static inline uint32_t getblock (const uint32_t * p, int i)
 {
     return p[i];
 }
@@ -61,7 +59,7 @@ FORCE_INLINE uint32_t getblock (const uint32_t * p, int i)
 //-----------------------------------------------------------------------------
 // Finalization mix - force all bits of a hash block to avalanche
 
-FORCE_INLINE uint32_t fmix (uint32_t h)
+static inline uint32_t fmix (uint32_t h)
 {
     h ^= h >> 16;
     h *= 0x85ebca6b;
@@ -76,7 +74,7 @@ FORCE_INLINE uint32_t fmix (uint32_t h)
 uint32_t uniform_hash (const void * key, size_t len, uint32_t seed)
 {
     const uint8_t * data = (const uint8_t*)key;
-    const int nblocks = len / 4;
+    const int nblocks = (int)len / 4;
 
     uint32_t h1 = seed;
 

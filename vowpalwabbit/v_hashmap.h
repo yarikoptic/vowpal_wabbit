@@ -34,10 +34,10 @@ template<class K, class V> class v_hashmap{
     return dat.end_array-dat.begin;
   }
 
-  v_hashmap(size_t min_size, V def, bool (*eq)(K,K)) {
+  void init(size_t min_size, V def, bool (*eq)(K,K)) {
     dat = v_array<hash_elem>();
     if (min_size < 1023) min_size = 1023;
-    reserve(dat, min_size); // reserve sets to 0 ==> occupied=false
+    dat.resize(min_size, true); // resize sets to 0 ==> occupied=false
 
     default_value = def;
     equivalent = eq;
@@ -46,12 +46,15 @@ template<class K, class V> class v_hashmap{
     num_occupants = 0;
   }
 
+  v_hashmap(size_t min_size, V def, bool (*eq)(K,K)) {
+    init(min_size, def, eq);
+  }
+
   void set_equivalent(bool (*eq)(K,K)) { equivalent = eq; }
 
   ~v_hashmap() {
     //std::cerr << "~v_hashmap" << std::endl;
-    dat.erase();
-    free(dat.begin);
+    dat.delete_v();
   }
 
   void clear() {
@@ -110,14 +113,14 @@ template<class K, class V> class v_hashmap{
     //    printf("doubling size!\n");
     // remember the old occupants
     v_array<hash_elem>tmp = v_array<hash_elem>();
-    reserve(tmp, num_occupants+10);
+    tmp.resize(num_occupants+10, true);
     for (hash_elem* e=dat.begin; e!=dat.end_array; e++)
       if (e->occupied)
-        push(tmp, *e);
+        tmp.push_back(*e);
     
     // double the size and clear
     //std::cerr<<"doubling to "<<(base_size()*2) << " units == " << (base_size()*2*sizeof(hash_elem)) << " bytes / " << ((size_t)-1)<<std::endl;
-    reserve(dat, base_size()*2);
+    dat.resize(base_size()*2, true);
     memset(dat.begin, 0, base_size()*sizeof(hash_elem));
 
     // re-insert occupants
@@ -126,8 +129,7 @@ template<class K, class V> class v_hashmap{
       //      std::cerr << "reinserting " << e->key << " at " << last_position << std::endl;
       put_after_get_nogrow(e->key, e->hash, e->val);
     }
-    tmp.erase();
-    free(tmp.begin);
+    tmp.delete_v();
   }
 
   V get(K key, size_t hash) {
@@ -153,7 +155,7 @@ template<class K, class V> class v_hashmap{
       // check to make sure we haven't cycled around -- this is a bug!
       if (last_position == first_position) {
         std::cerr << "error: v_hashmap did not grow enough!" << std::endl;
-        exit(-1);
+        throw std::exception();
       }
     }
   }
@@ -181,7 +183,7 @@ template<class K, class V> class v_hashmap{
       // check to make sure we haven't cycled around -- this is a bug!
       if (last_position == first_position) {
         std::cerr << "error: v_hashmap did not grow enough!" << std::endl;
-        exit(-1);
+        throw std::exception();
       }
     }
   }

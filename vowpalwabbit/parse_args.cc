@@ -7,7 +7,7 @@ license as described in the file LICENSE.
 #include <float.h>
 
 #include "cache.h"
-#include "io.h"
+#include "io_buf.h"
 #include "parse_regressor.h"
 #include "parser.h"
 #include "parse_args.h"
@@ -20,7 +20,6 @@ license as described in the file LICENSE.
 #include "csoaa.h"
 #include "wap.h"
 #include "cb.h"
-#include "sequence.h"
 #include "searn.h"
 #include "bfgs.h"
 #include "lda_core.h"
@@ -28,6 +27,8 @@ license as described in the file LICENSE.
 #include "gd_mf.h"
 #include "vw.h"
 #include "rand48.h"
+#include "parse_args.h"
+#include "binary.h"
 
 using namespace std;
 //
@@ -55,6 +56,7 @@ vw parse_args(int argc, char *argv[])
     ("active_learning", "active learning mode")
     ("active_simulation", "active learning simulation mode")
     ("active_mellowness", po::value<float>(&all.active_c0), "active learning mellowness parameter c_0. Default 8")
+    ("binary", "report loss as binary classification on -1,1")
     ("sgd", "use regular stochastic gradient descent update.")
     ("adaptive", "use adaptive, individual learning rates.")
     ("invariant", "use safe/importance aware updates.")
@@ -67,6 +69,7 @@ vw parse_args(int argc, char *argv[])
     ("cache,c", "Use a cache.  The default is <data>.cache")
     ("cache_file", po::value< vector<string> >(), "The location(s) of cache_file.")
     ("compressed", "use gzip format whenever possible. If a cache file is being created, this option creates a compressed cache file. A mixture of raw-text & compressed inputs are supported with autodetection.")
+    ("no_stdin", "do not default to reading from stdin")
     ("conjugate_gradient", "use conjugate gradient based optimization")
     ("csoaa", po::value<size_t>(), "Use one-against-all multiclass learning with <k> costs")
     ("wap", po::value<size_t>(), "Use weighted all-pairs multiclass learning with <k> costs")
@@ -117,16 +120,17 @@ vw parse_args(int argc, char *argv[])
     ("cubic", po::value< vector<string> > (),
      "Create and use cubic features")
     ("quiet", "Don't output diagnostics")
-    ("rank", po::value<size_t>(&all.rank), "rank for matrix factorization.")
+    ("rank", po::value<uint32_t>(&all.rank), "rank for matrix factorization.")
     ("random_weights", po::value<bool>(&all.random_weights), "make initial weights random")
     ("random_seed", po::value<size_t>(&random_seed), "seed random number generator")
     ("raw_predictions,r", po::value< string >(),
      "File to output unnormalized predictions to")
     ("ring_size", po::value<size_t>(&(all.p->ring_size)), "size of example ring")
     ("save_per_pass", "Save the model after every pass over data")
+    ("save_resume", "save extra state so learning can be resumed later with new data")
     ("sendto", po::value< vector<string> >(), "send examples to <host>")
-    ("sequence", po::value<size_t>(), "Do sequence prediction with <k> labels per element")
     ("searn", po::value<size_t>(), "use searn, argument=maximum action id")
+    ("searnimp", po::value<size_t>(), "use searn, argument=maximum action id or 0 for LDF")
     ("testonly,t", "Ignore label information and just test")
     ("loss_function", po::value<string>()->default_value("squared"), "Specify the loss function to be used, uses squared by default. Currently available ones are squared, classic, hinge, logistic and quantile.")
     ("quantile_tau", po::value<float>()->default_value(0.5), "Parameter \\tau associated with Quantile loss. Defaults to 0.5")
@@ -160,9 +164,8 @@ vw parse_args(int argc, char *argv[])
 
   all.data_filename = "";
 
-  all.sequence = false;
   all.searn = false;
-
+  all.searnstr = NULL;
 
   all.sd->weighted_unlabeled_examples = all.sd->t;
   all.initial_t = (float)all.sd->t;
@@ -191,6 +194,9 @@ vw parse_args(int argc, char *argv[])
   if (vm.count("active_learning") && !all.active_simulation)
     all.active = true;
 
+  if (vm.count("no_stdin"))
+    all.stdin_off = true;
+
   if (vm.count("testonly") || all.eta == 0.)
     {
       if (!all.quiet)
@@ -201,6 +207,12 @@ vw parse_args(int argc, char *argv[])
     }
   else
     all.training = true;
+
+  if ( (vm.count("total") || vm.count("node") || vm.count("unique_id")) && !(vm.count("total") && vm.count("node") && vm.count("unique_id")) )
+    {
+      cout << "you must specificy unique_id, total, and node if you specify any" << endl;
+      throw exception();
+    }
 
   all.stride = 4; //use stride of 4 for default invariant normalized adaptive updates
   //if we are doing matrix factorization, or user specified anything in sgd,adaptive,invariant,normalized, we turn off default update rules and use whatever user specified
@@ -228,40 +240,8 @@ vw parse_args(int argc, char *argv[])
     }
   }
 
-  if (vm.count("bfgs") || vm.count("conjugate_gradient")) {
-    all.driver = BFGS::drive_bfgs;
-    all.learn = BFGS::learn;
-    all.finish = BFGS::finish;
-    all.bfgs = true;
-    all.stride = 4;
-    
-    if (vm.count("hessian_on") || all.m==0) {
-      all.hessian_on = true;
-    }
-    if (!all.quiet) {
-      if (all.m>0)
-	cerr << "enabling BFGS based optimization ";
-      else
-	cerr << "enabling conjugate gradient optimization via BFGS ";
-      if (all.hessian_on)
-	cerr << "with curvature calculation" << endl;
-      else
-	cerr << "**without** curvature calculation" << endl;
-    }
-    if (all.numpasses < 2)
-      {
-	cout << "you must make at least 2 passes to use BFGS" << endl;
-	exit(1);
-      }
-
-    //default initial_t to 1 instead of 0
-    if(!vm.count("initial_t")) {
-      all.sd->t = 1.f;
-      all.sd->weighted_unlabeled_examples = 1.f;
-      all.initial_t = 1.f;
-    }
-  }
-
+  if (vm.count("bfgs") || vm.count("conjugate_gradient")) 
+    BFGS::parse_args(all, to_pass_further, vm, vm_file);
 
   if (vm.count("version") || argc == 1) {
     /* upon direct query for version -- spit it out to stdout */
@@ -276,7 +256,7 @@ vw parse_args(int argc, char *argv[])
     if(vm.count("sort_features"))
       {
 	cerr << "ngram is incompatible with sort_features.  " << endl;
-	exit(1);
+	throw exception();
       }
   }
   if(vm.count("skips"))
@@ -285,7 +265,7 @@ vw parse_args(int argc, char *argv[])
     if(!vm.count("ngram"))
       {
 	cout << "You can not skip unless ngram is > 1" << endl;
-	exit(1);
+	throw exception();
       }
     cerr << "You have chosen to generate " << all.skips << "-skip-" << all.ngram << "-grams" << endl;
     if(all.skips > 4)
@@ -298,11 +278,11 @@ vw parse_args(int argc, char *argv[])
   if (vm.count("bit_precision"))
     {
       all.default_bits = false;
-      all.num_bits = vm["bit_precision"].as< size_t>();
+      all.num_bits = (uint32_t)vm["bit_precision"].as< size_t>();
       if (all.num_bits > min(32, sizeof(size_t)*8 - 3))
 	{
 	  cout << "Only " << min(32, sizeof(size_t)*8 - 3) << " or fewer bits allowed.  If this is a serious limit, speak up." << endl;
-	  exit(1);
+	  throw exception();
 	}
     }
   
@@ -339,7 +319,7 @@ vw parse_args(int argc, char *argv[])
 	      cerr << endl << "warning, ignoring characters after the 2nd.\n";
 	    if (i->length() < 2) {
 	      cerr << endl << "error, quadratic features must involve two sets.\n";
-	      exit(0);
+	      throw exception();
 	    }
 	  }
 	  cerr << endl;
@@ -358,12 +338,25 @@ vw parse_args(int argc, char *argv[])
 	      cerr << endl << "warning, ignoring characters after the 3rd.\n";
 	    if (i->length() < 3) {
 	      cerr << endl << "error, cubic features must involve three sets.\n";
-	      exit(0);
+	      throw exception();
 	    }
 	  }
 	  cerr << endl;
 	}
     }
+
+  io_buf io_temp;
+  parse_regressor_args(all, vm, io_temp);
+
+  //parse flags from regressor file
+  all.options_from_file_argv = VW::get_argv_from_string(all.options_from_file,all.options_from_file_argc);
+
+  po::parsed_options parsed_file = po::command_line_parser(all.options_from_file_argc, all.options_from_file_argv).
+    style(po::command_line_style::default_style ^ po::command_line_style::allow_guessing).
+    options(desc).allow_unregistered().run();
+
+  po::store(parsed_file, vm_file);
+  po::notify(vm_file);
 
   for (size_t i = 0; i < 256; i++)
     all.ignore[i] = false;
@@ -420,22 +413,22 @@ vw parse_args(int argc, char *argv[])
     if ( vm.count("adaptive") )
       {
 	cerr << "adaptive is not implemented for matrix factorization" << endl;
-        exit(1);
+        throw exception();
       }
     if ( vm.count("normalized") )
       {
 	cerr << "normalized is not implemented for matrix factorization" << endl;
-        exit(1);
+        throw exception();
       }
     if ( vm.count("exact_adaptive_norm") )
       {
 	cerr << "normalized adaptive updates is not implemented for matrix factorization" << endl;
-        exit(1);
+        throw exception();
       }
     if (vm.count("bfgs") || vm.count("conjugate_gradient"))
       {
 	cerr << "bfgs is not implemented for matrix factorization" << endl;
-	exit (1);
+	throw exception();
       }	
 
     //default initial_t to 1 instead of 0
@@ -452,38 +445,20 @@ vw parse_args(int argc, char *argv[])
   //if (vm.count("nonormalize"))
   //  all.nonormalize = true;
 
-  if (vm.count("lda")) {
-    //default initial_t to 1 instead of 0
-    if(!vm.count("initial_t")) {
-      all.sd->t = 1.f;
-      all.sd->weighted_unlabeled_examples = 1.f;
-      all.initial_t = 1.f;
-    }
-
-    lda_parse_flags(all, to_pass_further, vm);
-    all.driver = drive_lda;
-  }
+  if (vm.count("lda")) 
+    LDA::parse_flags(all, to_pass_further, vm);
 
   if (!vm.count("lda") && !all.adaptive && !all.normalized_updates) 
     all.eta *= powf((float)(all.sd->t), all.power_t);
-
-  parse_regressor_args(all, vm, all.final_regressor_name, all.quiet);
-
-  //parse flags from regressor file
-  all.options_from_file_argv = VW::get_argv_from_string(all.options_from_file,all.options_from_file_argc);
-
-  po::parsed_options parsed_file = po::command_line_parser(all.options_from_file_argc, all.options_from_file_argv).
-    style(po::command_line_style::default_style ^ po::command_line_style::allow_guessing).
-    options(desc).allow_unregistered().run();
-
-  po::store(parsed_file, vm_file);
-  po::notify(vm_file);
   
   if (vm.count("readable_model"))
     all.text_regressor_name = vm["readable_model"].as<string>();
   
   if (vm.count("save_per_pass"))
     all.save_per_pass = true;
+
+  if (vm.count("save_resume"))
+    all.save_resume = true;
 
   if (vm.count("min_prediction"))
     all.sd->min_label = vm["min_prediction"].as<float>();
@@ -502,17 +477,11 @@ vw parse_args(int argc, char *argv[])
     loss_parameter = vm["quantile_tau"].as<float>();
 
   all.is_noop = false;
-  if (vm.count("noop")) {
-    all.driver = drive_noop;
-    all.learn = learn_noop;
-    all.is_noop = true;
-  }
+  if (vm.count("noop")) 
+    NOOP::parse_flags(all);
   
-  if (all.rank != 0) {
-    all.driver = drive_gd_mf;
-    loss_function = "classic";
-    cerr << "Forcing classic squared loss for matrix factorization" << endl;
-  }
+  if (all.rank != 0) 
+    GDMF::parse_flags(all);
 
   all.loss = getLossFunction(&all, loss_function, (float)loss_parameter);
 
@@ -537,21 +506,20 @@ vw parse_args(int argc, char *argv[])
       cerr << "predictions = " <<  vm["predictions"].as< string >() << endl;
     if (strcmp(vm["predictions"].as< string >().c_str(), "stdout") == 0)
       {
-	push(all.final_prediction_sink, (size_t) 1);//stdout
+	all.final_prediction_sink.push_back((size_t) 1);//stdout
       }
     else
       {
 	const char* fstr = (vm["predictions"].as< string >().c_str());
-	FILE* foo;
+	int f;
 #ifdef _WIN32
-	foo = fopen(fstr, "wb");
+	_sopen_s(&f, fstr, _O_CREAT|_O_WRONLY|_O_BINARY|_O_TRUNC, _SH_DENYWR, _S_IREAD|_S_IWRITE);
 #else
-	foo = fopen(fstr, "w");
+	f = open(fstr, O_CREAT|O_WRONLY|O_LARGEFILE|O_TRUNC,0666);
 #endif
-	int f = fileno(foo);
 	if (f < 0)
 	  cerr << "Error opening the predictions file: " << fstr << endl;
-	push(all.final_prediction_sink, (size_t) f);
+	all.final_prediction_sink.push_back((size_t) f);
       }
   }
 
@@ -563,13 +531,13 @@ vw parse_args(int argc, char *argv[])
     else
 	{
 	  const char* t = vm["raw_predictions"].as< string >().c_str();
-	  FILE* f;
+	  int f;
 #ifdef _WIN32
-	  f = fopen(t, "wb");
+	  _sopen_s(&f, t, _O_CREAT|_O_WRONLY|_O_BINARY|_O_TRUNC, _SH_DENYWR, _S_IREAD|_S_IWRITE);
 #else
-	  f = fopen(t, "w");
+	  f = open(t, O_CREAT|O_WRONLY|O_LARGEFILE|O_TRUNC,0666);
 #endif
-      all.raw_prediction = fileno(f);
+	  all.raw_prediction = f;
 	}
   }
 
@@ -577,10 +545,11 @@ vw parse_args(int argc, char *argv[])
     all.audit = true;
 
   if (vm.count("sendto"))
-    {
-      all.driver = drive_send;
-      parse_send_args(vm, all.pairs);
-    }
+    SENDER::parse_send_args(all, vm, all.pairs);
+
+  // load rest of regressor
+  all.l.save_load(&all, all.l.data, io_temp, true, false);
+  io_temp.close_file();
 
   if (all.l1_lambda < 0.) {
     cerr << "l1_lambda should be nonnegative: resetting from " << all.l1_lambda << " to 0" << endl;
@@ -600,10 +569,6 @@ vw parse_args(int argc, char *argv[])
 	cerr << "using l2 regularization = " << all.l2_lambda << endl;
     }
 
-  if (all.bfgs) {
-    BFGS::initializer(all);
-  }
-
   bool got_mc = false;
   bool got_cs = false;
   bool got_cb = false;
@@ -612,43 +577,46 @@ vw parse_args(int argc, char *argv[])
     NN::parse_flags(all, to_pass_further, vm, vm_file);
   }
   
+  if (vm.count("binary") || vm_file.count("binary"))
+    BINARY::parse_flags(all, to_pass_further, vm, vm_file);
+
   if(vm.count("oaa") || vm_file.count("oaa") ) {
-    if (got_mc) { cerr << "error: cannot specify multiple MC learners" << endl; exit(-1); }
+    if (got_mc) { cerr << "error: cannot specify multiple MC learners" << endl; throw exception(); }
 
     OAA::parse_flags(all, to_pass_further, vm, vm_file);
     got_mc = true;
   }
   
   if (vm.count("ect") || vm_file.count("ect") ) {
-    if (got_mc) { cerr << "error: cannot specify multiple MC learners" << endl; exit(-1); }
+    if (got_mc) { cerr << "error: cannot specify multiple MC learners" << endl; throw exception(); }
 
     ECT::parse_flags(all, to_pass_further, vm, vm_file);
     got_mc = true;
   }
 
   if(vm.count("csoaa") || vm_file.count("csoaa") ) {
-    if (got_cs) { cerr << "error: cannot specify multiple CS learners" << endl; exit(-1); }
+    if (got_cs) { cerr << "error: cannot specify multiple CS learners" << endl; throw exception(); }
     
     CSOAA::parse_flags(all, to_pass_further, vm, vm_file);
     got_cs = true;
   }
 
   if(vm.count("wap") || vm_file.count("wap") ) {
-    if (got_cs) { cerr << "error: cannot specify multiple CS learners" << endl; exit(-1); }
+    if (got_cs) { cerr << "error: cannot specify multiple CS learners" << endl; throw exception(); }
     
     WAP::parse_flags(all, to_pass_further, vm, vm_file);
     got_cs = true;
   }
 
   if(vm.count("csoaa_ldf") || vm_file.count("csoaa_ldf")) {
-    if (got_cs) { cerr << "error: cannot specify multiple CS learners" << endl; exit(-1); }
+    if (got_cs) { cerr << "error: cannot specify multiple CS learners" << endl; throw exception(); }
 
     CSOAA_AND_WAP_LDF::parse_flags(all, to_pass_further, vm, vm_file);
     got_cs = true;
   }
 
   if(vm.count("wap_ldf") || vm_file.count("wap_ldf") ) {
-    if (got_cs) { cerr << "error: cannot specify multiple CS learners" << endl; exit(-1); }
+    if (got_cs) { cerr << "error: cannot specify multiple CS learners" << endl; throw exception(); }
 
     CSOAA_AND_WAP_LDF::parse_flags(all, to_pass_further, vm, vm_file);
     got_cs = true;
@@ -669,26 +637,11 @@ vw parse_args(int argc, char *argv[])
     got_cb = true;
   }
 
-  if (vm.count("searn") || all.searn) { //all.searn can be set to true while loading regressor
-    if (vm.count("sequence")) { cerr << "error: you cannot use searn and sequence simultaneously" << endl; exit(-1); }
-  }
-
-  if (vm.count("sequence") || vm_file.count("sequence") ) {
-    if (!got_cs) {
-      //add csoaa flag to vm so that it is parsed in csoaa::parse_flags
-      if( vm_file.count("sequence") ) vm.insert(pair<string,po::variable_value>(string("csoaa"),vm_file["sequence"]));
-      else vm.insert(pair<string,po::variable_value>(string("csoaa"),vm["sequence"]));
-      
-      CSOAA::parse_flags(all, to_pass_further, vm, vm_file);  // default to CSOAA unless wap is specified
-      got_cs = true;
-    }
-
-    Sequence::parse_flags(all, to_pass_further, vm, vm_file);
-  }
-
   if (vm.count("searn") || vm_file.count("searn") ) { 
-    if (vm.count("sequence") || vm_file.count("sequence") ) { cerr << "error: you cannot use searn and sequence simultaneously" << endl; exit(-1); }
-
+    if (vm.count("searnimp") || vm_file.count("searnimp")) {
+      cerr << "fail: cannot have both --searn and --searnimp" << endl;
+      throw exception();
+    }
     if (!got_cs && !got_cb) {
       //add csoaa flag to vm so that it is parsed in csoaa::parse_flags
       if( vm_file.count("searn") ) vm.insert(pair<string,po::variable_value>(string("csoaa"),vm_file["searn"]));
@@ -700,9 +653,24 @@ vw parse_args(int argc, char *argv[])
     Searn::parse_flags(all, to_pass_further, vm, vm_file);
   }
 
+  if (vm.count("searnimp") || vm_file.count("searnimp") ) { 
+    if (!got_cs && !got_cb) {
+      //add csoaa flag to vm so that it is parsed in csoaa::parse_flags
+      if( vm_file.count("searnimp") ) vm.insert(pair<string,po::variable_value>(string("csoaa"),vm_file["searnimp"]));
+      else vm.insert(pair<string,po::variable_value>(string("csoaa"),vm["searnimp"]));
+      
+      CSOAA::parse_flags(all, to_pass_further, vm, vm_file);  // default to CSOAA unless others have been specified
+      got_cs = true;
+    }
+    all.searnstr = (ImperativeSearn::searn*)calloc(1, sizeof(ImperativeSearn::searn));
+    ImperativeSearn::parse_flags(all, to_pass_further, vm, vm_file);
+  }
+
+
+
   if (got_cb && got_mc) {
     cerr << "error: doesn't make sense to do both MC learning and CB learning" << endl;
-    exit(-1);
+    throw exception();
   }
 
   if (to_pass_further.size() > 0) {
@@ -712,9 +680,13 @@ vw parse_args(int argc, char *argv[])
     if ((to_pass_further.size() == 1) &&
         (to_pass_further[to_pass_further.size()-1] == last_unrec_arg)) {
 
-      int f = io_buf().open_file(last_unrec_arg.c_str(), io_buf::READ);
+      int f = io_buf().open_file(last_unrec_arg.c_str(), all.stdin_off, io_buf::READ);
       if (f != -1) {
-        close(f);
+#ifdef _WIN32
+		 _close(f);
+#else
+		  close(f);
+#endif
         //cerr << "warning: final argument '" << last_unrec_arg << "' assumed to be input file; in the future, please use -d" << endl;
         all.data_filename = last_unrec_arg;
         if (ends_with(last_unrec_arg, ".gz"))
@@ -728,7 +700,7 @@ vw parse_args(int argc, char *argv[])
       for (size_t i=0; i<to_pass_further.size(); i++)
         cerr << " " << to_pass_further[i];
       cerr << endl;
-      exit(-1);
+      throw exception();
     }
   }
 
@@ -779,24 +751,24 @@ namespace VW {
     foo.end_array = foo.begin = foo.end = NULL;
     tokenize(' ', ss, foo);
     
-    char** argv = (char**)calloc(foo.index(), sizeof(char*));
-    for (size_t i = 0; i < foo.index(); i++)
+    char** argv = (char**)calloc(foo.size(), sizeof(char*));
+    for (size_t i = 0; i < foo.size(); i++)
       {
 	*(foo[i].end) = '\0';
 	argv[i] = (char*)calloc(foo[i].end-foo[i].begin+1, sizeof(char));
         sprintf(argv[i],"%s",foo[i].begin);
       }
 
-    argc = foo.index();
+    argc = (int)foo.size();
     free(c);
-    if (foo.begin != NULL)
-      free(foo.begin);
+    foo.delete_v();
     return argv;
   }
  
   vw initialize(string s)
   {
     int argc = 0;
+    s += " --no_stdin";
     char** argv = get_argv_from_string(s,argc);
     
     vw all = parse_args(argc, argv);
@@ -812,19 +784,29 @@ namespace VW {
 
   void finish(vw& all)
   {
-    all.finish(&all);
-    free_parser(all);
     finalize_regressor(all, all.final_regressor_name);
+    all.l.finish(&all, all.l.data);
+    if (all.reg.weight_vector != NULL)
+      free(all.reg.weight_vector);
+    if (all.searnstr != NULL) free(all.searnstr);
+    free_parser(all);
     finalize_source(all.p);
     free(all.p->lp);
     all.p->parse_name.erase();
-    if (all.p->parse_name.begin != NULL)
-      free(all.p->parse_name.begin);
+    all.p->parse_name.delete_v();
     free(all.p);
     free(all.sd);
     for (int i = 0; i < all.options_from_file_argc; i++)
       free(all.options_from_file_argv[i]);
     free(all.options_from_file_argv);
+    for (size_t i = 0; i < all.final_prediction_sink.size(); i++)
+      if (all.final_prediction_sink[i] != 1)
+#ifdef _WIN32
+	_close(all.final_prediction_sink[i]);
+#else
+	close(all.final_prediction_sink[i]);
+#endif
+    all.final_prediction_sink.delete_v();
     delete all.loss;
   }
 }

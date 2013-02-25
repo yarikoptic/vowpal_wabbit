@@ -34,7 +34,6 @@ namespace CB {
 
   void parse_flags(vw& all, std::vector<std::string>&, po::variables_map& vm, po::variables_map& vm_file);
 
-  void output_example(vw& all, example* ec);
   size_t read_cached_label(shared_data* sd, void* v, io_buf& cache);
   void cache_label(void* v, io_buf& cache);
   void default_label(void* v);
@@ -42,9 +41,11 @@ namespace CB {
   void delete_label(void* v);
   float weight(void* v);
   float initial(void* v);
+  void copy_label(void*&dst,void*src);
   const label_parser cb_label_parser = {default_label, parse_label, 
 					cache_label, read_cached_label, 
 					delete_label, weight, initial, 
+                                        copy_label,
 					sizeof(label)};
 
 }

@@ -6,7 +6,7 @@ license as described in the file LICENSE.
 #ifndef CSOAA_H
 #define CSOAA_H
 
-#include "io.h"
+#include "io_buf.h"
 #include "parse_primitives.h"
 #include "global_data.h"
 #include "example.h"
@@ -17,7 +17,7 @@ license as described in the file LICENSE.
 namespace CSOAA {
   struct wclass {
     float x;
-    size_t weight_index;
+    uint32_t weight_index;
     float partial_prediction;  // a partial prediction: new!
     float wap_value;  // used for wap to store values derived from costs
     bool operator==(wclass j){return weight_index == j.weight_index;}
@@ -36,11 +36,13 @@ namespace CSOAA {
   void default_label(void* v);
   void parse_label(parser* p, shared_data* sd, void* v, v_array<substring>& words);
   void delete_label(void* v);
+  void copy_label(void*&dst,void*src);
   float weight(void* v);
   float initial(void* v);
   const label_parser cs_label_parser = {default_label, parse_label, 
 					cache_label, read_cached_label, 
 					delete_label, weight, initial, 
+                                        copy_label,
 					sizeof(label)};
 
   bool example_is_test(example* ec);
@@ -54,18 +56,6 @@ namespace CSOAA_AND_WAP_LDF {
   void output_example(vw& all, example* ec, bool&hit_loss);
 
   const label_parser cs_label_parser = CSOAA::cs_label_parser;
-}
-
-namespace LabelDict {
-  bool ec_is_label_definition(example*ec);
-  bool ec_is_example_header(example*ec);
-  bool ec_seq_is_label_definition(v_array<example*>ec_seq);
-  void add_example_namespaces_from_example(example*target, example*source);
-  void del_example_namespaces_from_example(example*target, example*source);
-  void add_example_namespace_from_memory(example*ec, size_t lab);
-  void del_example_namespace_from_memory(example* ec, size_t lab);
-  void set_label_features(size_t lab, v_array<feature>features);
-  void free_label_features();
 }
 
 #endif

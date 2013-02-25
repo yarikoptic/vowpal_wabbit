@@ -6,7 +6,7 @@ license as described in the file LICENSE.
 #ifndef SL_H
 #define SL_H
 
-#include "io.h"
+#include "io_buf.h"
 #include "parse_primitives.h"
 #include "global_data.h"
 #include "example.h"
@@ -29,6 +29,7 @@ float get_initial(void* v);
 const label_parser simple_label = {default_simple_label, parse_simple_label, 
 				   cache_simple_label, read_cached_simple_label, 
 				   delete_simple_label, get_weight, get_initial, 
+                                   NULL,
 				   sizeof(label_data)};
 
 float query_decision(vw& all, example* ec, float k);

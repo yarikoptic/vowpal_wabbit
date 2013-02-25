@@ -6,7 +6,7 @@ license as described in the file LICENSE.
 #ifndef OAA_H
 #define OAA_H
 
-#include "io.h"
+#include "io_buf.h"
 #include "parse_primitives.h"
 #include "global_data.h"
 #include "example.h"
@@ -17,11 +17,9 @@ namespace OAA
 {
 
   struct mc_label {
-    size_t label;
+    float label;
     float weight;
   };
-  
-  typedef size_t prediction_t;
   
   void parse_flags(vw& all, std::vector<std::string>&, po::variables_map& vm, po::variables_map& vm_file);
   
@@ -35,6 +33,7 @@ namespace OAA
   const label_parser mc_label_parser = {default_label, parse_label, 
 					cache_label, read_cached_label, 
 					delete_label, weight, initial, 
+                                        NULL,
 					sizeof(mc_label)};
   
   void output_example(vw& all, example* ec);
@@ -42,14 +41,14 @@ namespace OAA
   inline int example_is_newline(example* ec)
   {
     // if only index is constant namespace or no index
-    return ((ec->indices.index() == 0) || 
-            ((ec->indices.index() == 1) &&
+    return ((ec->indices.size() == 0) || 
+            ((ec->indices.size() == 1) &&
              (ec->indices.last() == constant_namespace)));
   }
 
   inline int example_is_test(example* ec)
   {
-    return (((OAA::mc_label*)ec->ld)->label == (size_t)-1);
+    return (((OAA::mc_label*)ec->ld)->label == (uint32_t)-1);
   }
 
 

@@ -22,21 +22,27 @@ struct global_prediction {
   float weight;
 };
 
-int really_read(int sock, void* in, size_t count)
+size_t really_read(int sock, void* in, size_t count)
 {
   char* buf = (char*)in;
   size_t done = 0;
   int r = 0;
   while (done < count)
     {
-      if ((r = read(sock,buf,count-done)) == 0)
+      if ((r = 
+#ifdef _WIN32
+		  _read(sock,buf,(unsigned int)(count-done))
+#else
+		  read(sock,buf,(unsigned int)(count-done))
+#endif
+		  ) == 0)
 	return 0;
       else
 	if (r < 0)
 	  {
 	    cerr << "argh! bad read! on message from " << sock << endl;
 	    perror(NULL);
-	    exit(0);
+	    throw exception();
 	  }
 	else
 	  {
@@ -50,7 +56,7 @@ int really_read(int sock, void* in, size_t count)
 void get_prediction(int sock, float& res, float& weight)
 {
   global_prediction p;
-  int count = really_read(sock, &p, sizeof(p));
+  size_t count = really_read(sock, &p, sizeof(p));
   res = p.p;
   weight = p.weight;
   
@@ -59,11 +65,17 @@ void get_prediction(int sock, float& res, float& weight)
 
 void send_prediction(int sock, global_prediction p)
 {
-  if (write(sock, &p, sizeof(p)) < (int)sizeof(p))
+  if (
+#ifdef _WIN32
+	  _write(sock, &p, sizeof(p)) 
+#else
+	  write(sock, &p, sizeof(p)) 
+#endif 
+	  < (int)sizeof(p))
     {
       cerr << "argh! bad global write! " << sock << endl;
       perror(NULL);
-      exit(0);
+      throw exception();
     }
 }
 
@@ -80,7 +92,7 @@ void print_tag(std::stringstream& ss, v_array<char> tag)
 {
   if (tag.begin != tag.end){
     ss << ' ';
-    ss.write(tag.begin, sizeof(char)*tag.index());
+    ss.write(tag.begin, sizeof(char)*tag.size());
   }  
 }
 
@@ -95,7 +107,11 @@ void print_result(int f, float res, float weight, v_array<char> tag)
       print_tag(ss, tag);
       ss << '\n';
       ssize_t len = ss.str().size();
-      ssize_t t = write(f, ss.str().c_str(), len);
+#ifdef _WIN32
+	  ssize_t t = _write(f, ss.str().c_str(), (unsigned int)len);
+#else
+	  ssize_t t = write(f, ss.str().c_str(), (unsigned int)len);
+#endif
       if (t != len)
         {
           cerr << "write error" << endl;
@@ -113,7 +129,11 @@ void print_raw_text(int f, string s, v_array<char> tag)
   print_tag (ss, tag);
   ss << '\n';
   ssize_t len = ss.str().size();
-  ssize_t t = write(f, ss.str().c_str(), len);
+#ifdef _WIN32
+  ssize_t t = _write(f, ss.str().c_str(), (unsigned int)len);
+#else  
+  ssize_t t = write(f, ss.str().c_str(), (unsigned int)len);
+#endif
   if (t != len)
     {
       cerr << "write error" << endl;
@@ -136,7 +156,11 @@ void active_print_result(int f, float res, float weight, v_array<char> tag)
 	}
       ss << '\n';
       ssize_t len = ss.str().size();
-      ssize_t t = write(f, ss.str().c_str(), len);
+#ifdef _WIN32
+	  ssize_t t = _write(f, ss.str().c_str(), (unsigned int)len);
+#else
+	  ssize_t t = write(f, ss.str().c_str(), (unsigned int)len);
+#endif
       if (t != len)
 	cerr << "write error" << endl;
     }
@@ -156,7 +180,11 @@ void print_lda_result(vw& all, int f, float* res, float weight, v_array<char> ta
       print_tag(ss, tag);
       ss << '\n';
       ssize_t len = ss.str().size();
-      ssize_t t = write(f, ss.str().c_str(), len);
+#ifdef _WIN32
+	  ssize_t t = _write(f, ss.str().c_str(), (unsigned int)len);
+#else	  
+	  ssize_t t = write(f, ss.str().c_str(), (unsigned int)len);
+#endif 
       if (t != len)
 	cerr << "write error" << endl;
     }
@@ -172,25 +200,18 @@ void set_mm(shared_data* sd, float label)
 void noop_mm(shared_data* sd, float label)
 {}
 
+void vw::learn(void* a, example* ec)
+{
+  vw* all = (vw*)a;
+  all->l.learn(a,all->l.data,ec);
+}
+
 vw::vw()
 {
-  sd = (shared_data *) malloc(sizeof(shared_data));
-  sd->queries = 0;
-  sd->example_number = 0;
-  sd->weighted_examples = 0.;
-  sd->old_weighted_examples = 0.;
-  sd->weighted_labels = 0.;
-  sd->total_features = 0;
-  sd->sum_loss = 0.0;
-  sd->sum_loss_since_last_dump = 0.0;
+  sd = (shared_data *) calloc(1, sizeof(shared_data));
   sd->dump_interval = (float)exp(1.);
-  sd->gravity = 0.;
   sd->contraction = 1.;
-  sd->min_label = 0.;
   sd->max_label = 1.;
-  sd->t = 0.;
-  sd->binary_label = false;
-  sd->k = 0;
   
   p = new_parser();
   p->lp = (label_parser*)malloc(sizeof(label_parser));
@@ -198,9 +219,10 @@ vw::vw()
 
   reg_mode = 0;
 
+  current_pass = 0;
+
   bfgs = false;
   hessian_on = false;
-  sequence = false;
   stride = 1;
   num_bits = 18;
   default_bits = true;
@@ -212,13 +234,12 @@ vw::vw()
   minibatch = 1;
   span_server = "";
   m = 15; 
+  save_resume = false;
 
-  driver = drive_gd;
-  learn = learn_gd;
-  finish = finish_gd;
+  l = GD::get_learner();
+  scorer = l;
+
   set_minmax = set_mm;
-
-  base_learn = NULL;
 
   base_learner_nb_w = 1;
 
@@ -239,6 +260,12 @@ vw::vw()
   per_feature_regularizer_text = "";
 
   options_from_file = "";
+
+  #ifdef _WIN32
+  stdout_fileno = _fileno(stdout);
+  #else
+  stdout_fileno = fileno(stdout);
+  #endif
 
   searn = false;
 
@@ -269,10 +296,12 @@ vw::vw()
   active = false;
   active_c0 = 8.;
   active_simulation = false;
-  reg.weight_vectors = NULL;
-  reg.regularizers = NULL;
+  reg.weight_vector = NULL;
   pass_length = (size_t)-1;
   passes_complete = 0;
 
   save_per_pass = false;
+
+  stdin_off = false;
+  do_reset_source = false;
 }
