@@ -1,3 +1,3 @@
 version=3
-opts="filenamemangle=s/.*\/(.*)/vowpal-wabbit-$1\.tar\.gz/,uversionmangle=s/rc/~rc/g" \
- https://github.com/JohnLangford/vowpal_wabbit/tags .*tarball/([\d\.a-z]+) 
+opts="filenamemangle=s/.*\/v(.*)/vowpal-wabbit-$1/,uversionmangle=s/rc/~rc/g" \
+ https://github.com/JohnLangford/vowpal_wabbit/tags .*archive/v([\d\.a-z]+)\.tar\.gz

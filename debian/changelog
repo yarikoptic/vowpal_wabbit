@@ -5,6 +5,8 @@ vowpal-wabbit (7.2-1) experimental; urgency=low
       up_ld_vw_against_allreduce,
       changeset_5046679437b058e82e31f42be2a41a70e30e9d7a.diff
       removed (included upstream)
+  * debian/watch
+    - fixed up for recent changes on github
 
  -- Yaroslav Halchenko <debian@onerussian.com>  Mon, 25 Feb 2013 09:46:38 -0500
 
