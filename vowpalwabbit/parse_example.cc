@@ -65,7 +65,6 @@ public:
   char* endLine;
   float cur_channel_v;
   bool  new_index;
-  size_t mask;
   size_t anon; 
   bool audit;
   size_t channel_hash;
@@ -74,11 +73,12 @@ public:
   float v;
   parser* p;
   example* ae;
+  uint32_t weights_per_problem;
   
   ~TC_parser(){ }
   
   inline float featureValue(){
-    if(reading_head == endLine || *reading_head == '|' || *reading_head == ' ' || *reading_head == '\r')
+    if(reading_head == endLine || *reading_head == '|' || *reading_head == ' ' || *reading_head == '\t' || *reading_head == '\r')
       return 1.;
     else if(*reading_head == ':'){
       // featureValue --> ':' 'Float'
@@ -104,26 +104,26 @@ public:
   inline substring read_name(){
     substring ret;
     ret.begin = reading_head;
-    while( !(*reading_head == ' ' || *reading_head == ':' ||*reading_head == '|' || reading_head == endLine || *reading_head == '\r' ))
+    while( !(*reading_head == ' ' || *reading_head == '\t' || *reading_head == ':' ||*reading_head == '|' || reading_head == endLine || *reading_head == '\r' ))
       ++reading_head;
     ret.end = reading_head;
     return ret;
   }
   
   inline void maybeFeature(){
-    if(*reading_head == ' ' || *reading_head == '|'|| reading_head == endLine || *reading_head == '\r' ){
+    if(*reading_head == ' ' || *reading_head == '\t' || *reading_head == '|'|| reading_head == endLine || *reading_head == '\r' ){
       // maybeFeature --> ø
     }else {
       // maybeFeature --> 'String' FeatureValue
       substring feature_name=read_name();
       v = cur_channel_v * featureValue();
-      if(v == 0) return; //dont add 0 valued features to list of features
       size_t word_hash;
       if (feature_name.end != feature_name.begin)
-	word_hash = (p->hasher(feature_name,(uint32_t)channel_hash)) & mask;
+	word_hash = (p->hasher(feature_name,(uint32_t)channel_hash));
       else
 	word_hash = channel_hash + anon++;
-      feature f = {v,(uint32_t)word_hash};
+      if(v == 0) return; //dont add 0 valued features to list of features
+      feature f = {v,(uint32_t)word_hash * weights_per_problem};
       ae->sum_feat_sq[index] += v*v;
       ae->atomics[index].push_back(f);
       if(audit){
@@ -137,7 +137,7 @@ public:
   }
   
   inline void nameSpaceInfoValue(){
-    if(*reading_head == ' ' || reading_head == endLine || *reading_head == '|' || *reading_head == '\r' ){
+    if(*reading_head == ' ' || *reading_head == '\t' || reading_head == endLine || *reading_head == '|' || *reading_head == '\r' ){
       // nameSpaceInfoValue -->  ø
     }else if(*reading_head == ':'){
       // nameSpaceInfoValue --> ':' 'Float'
@@ -159,7 +159,7 @@ public:
   }
   
   inline void nameSpaceInfo(){
-    if(reading_head == endLine ||*reading_head == '|' || *reading_head == ' ' || *reading_head == ':' || *reading_head == '\r'){
+    if(reading_head == endLine ||*reading_head == '|' || *reading_head == ' ' || *reading_head == '\t' || *reading_head == ':' || *reading_head == '\r'){
       // syntax error
       cout << "malformed example !\nString expected after : " << std::string(beginLine, reading_head - beginLine).c_str()<< "\"" << endl;
     }else{
@@ -180,7 +180,7 @@ public:
   }
   
   inline void listFeatures(){
-    while(*reading_head == ' '){
+    while(*reading_head == ' ' || *reading_head == '\t'){
       //listFeatures --> ' ' MaybeFeature ListFeatures
       ++reading_head;
       maybeFeature();
@@ -198,7 +198,7 @@ public:
     index = 0;
     new_index = false;
     anon = 0;
-    if(*reading_head == ' ' || reading_head == endLine || *reading_head == '|' || *reading_head == '\r' ){
+    if(*reading_head == ' ' || *reading_head == '\t' || reading_head == endLine || *reading_head == '|' || *reading_head == '\r' ){
       // NameSpace --> ListFeatures
       index = (unsigned char)' ';
       if(ae->atomics[index].begin == ae->atomics[index].end)
@@ -242,7 +242,7 @@ public:
     this->endLine = endLine;
     this->p = all.p;
     this->ae = ae;
-    mask  = all.parse_mask;
+    this->weights_per_problem = all.weights_per_problem;
     audit = all.audit;
     listNameSpace();
   }

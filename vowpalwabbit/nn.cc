@@ -14,6 +14,7 @@ license as described in the file LICENSE.
 #include "cache.h"
 #include "v_hashmap.h"
 #include "rand48.h"
+#include "vw.h"
 
 using namespace std;
 
@@ -30,10 +31,11 @@ namespace NN {
     bool dropout;
     uint64_t xsubi;
     uint64_t save_xsubi;
-    size_t nn_current_pass;
     bool inpass;
+    bool finished_setup;
 
     learner base;
+    vw* all;
   };
 
 #define cast_uint32_t static_cast<uint32_t>
@@ -62,15 +64,31 @@ namespace NN {
     return -1.0f + 2.0f / (1.0f + fastexp (-2.0f * p));
   }
 
-  void learn_with_output(vw& all, nn& n, example* ec, bool shouldOutput)
-  {
-    if (GD::command_example(all, ec)) {
-      return;
+  static void
+  update_atomics_indices (v_array<feature>& f,
+                          uint32_t          offset)
+    {
+      for (feature* x = f.begin; x != f.end; ++x)
+        {
+          x->weight_index += offset;
+        }
     }
 
-    if (all.bfgs && ec->pass != n.nn_current_pass) {
-      n.xsubi = n.save_xsubi;
-      n.nn_current_pass = ec->pass;
+  void finish_setup (nn* n, vw& all);
+
+  void learn_with_output(vw& all, nn& n, example* ec, bool shouldOutput)
+  {
+    if (! n.finished_setup)
+      finish_setup (&n, all);
+
+    if (ec->end_pass) {
+      if (all.bfgs)
+        n.xsubi = n.save_xsubi;
+    }
+
+    if (command_example(&all, ec)) {
+      n.base.learn(ec);
+      return;
     }
 
     label_data* ld = (label_data*)ec->ld;
@@ -96,12 +114,10 @@ namespace NN {
     ld->label = FLT_MAX;
     for (unsigned int i = 0; i < n.k; ++i)
       {
-        if (i != 0)
-          update_example_indicies(all.audit, ec, n.increment);
+        update_example_indicies(all.audit, ec, n.increment);
 
-        ec->partial_prediction = 0.;
-        n.base.learn(&all,n.base.data,ec);
-        hidden_units[i] = GD::finalize_prediction (all, ec->partial_prediction);
+        n.base.learn(ec);
+        hidden_units[i] = ec->final_prediction;
 
         dropped_out[i] = (n.dropout && merand48 (n.xsubi) < 0.5);
 
@@ -110,6 +126,7 @@ namespace NN {
           outputStringStream << i << ':' << ec->partial_prediction << ',' << fasttanh (hidden_units[i]);
         }
       }
+    update_example_indicies(all.audit, ec, -n.k * n.increment);
     ld->label = save_label;
     all.loss = save_loss;
     all.set_minmax = save_set_minmax;
@@ -130,7 +147,7 @@ CONVERSE: // That's right, I'm using goto.  So sue me.
       {
         float sigmah = 
           (dropped_out[i]) ? 0.0f : dropscale * fasttanh (hidden_units[i]);
-        n.output_layer.atomics[nn_output_namespace][i+1].x = sigmah;
+        n.output_layer.atomics[nn_output_namespace][i].x = sigmah;
 
         n.output_layer.total_sum_feat_sq += sigmah * sigmah;
         n.output_layer.sum_feat_sq[nn_output_namespace] += sigmah * sigmah;
@@ -141,31 +158,29 @@ CONVERSE: // That's right, I'm using goto.  So sue me.
       // nn_output_namespace but at least it will not leak memory
       // in that case
 
-      update_example_indicies (all.audit, ec, n.increment);
+      update_atomics_indices (n.output_layer.atomics[nn_output_namespace], -ec->ft_offset);
       ec->indices.push_back (nn_output_namespace);
       v_array<feature> save_nn_output_namespace = ec->atomics[nn_output_namespace];
       ec->atomics[nn_output_namespace] = n.output_layer.atomics[nn_output_namespace];
       ec->sum_feat_sq[nn_output_namespace] = n.output_layer.sum_feat_sq[nn_output_namespace];
       ec->total_sum_feat_sq += n.output_layer.sum_feat_sq[nn_output_namespace];
-      ec->partial_prediction = 0.;
-      n.base.learn(&all, n.base.data, ec);
+      n.base.learn(ec);
       n.output_layer.partial_prediction = ec->partial_prediction;
       n.output_layer.loss = ec->loss;
       ec->total_sum_feat_sq -= n.output_layer.sum_feat_sq[nn_output_namespace];
       ec->sum_feat_sq[nn_output_namespace] = 0;
       ec->atomics[nn_output_namespace] = save_nn_output_namespace;
       ec->indices.pop ();
-      update_example_indicies (all.audit, ec, -n.increment);
+      update_atomics_indices (n.output_layer.atomics[nn_output_namespace], ec->ft_offset);
     }
     else {
       n.output_layer.ld = ec->ld;
-      n.output_layer.pass = ec->pass;
       n.output_layer.partial_prediction = 0;
       n.output_layer.eta_round = ec->eta_round;
       n.output_layer.eta_global = ec->eta_global;
       n.output_layer.global_weight = ec->global_weight;
       n.output_layer.example_t = ec->example_t;
-      n.base.learn(&all,n.base.data,&n.output_layer);
+      n.base.learn(&n.output_layer);
       n.output_layer.ld = 0;
     }
 
@@ -178,8 +193,8 @@ CONVERSE: // That's right, I'm using goto.  So sue me.
 
     if (all.training && ld->label != FLT_MAX) {
       float gradient = all.loss->first_derivative(all.sd, 
-                                                   n.output_layer.final_prediction,
-                                                   ld->label);
+                                                  n.output_layer.final_prediction,
+                                                  ld->label);
 
       if (fabs (gradient) > 0) {
         all.loss = n.squared_loss;
@@ -189,35 +204,28 @@ CONVERSE: // That's right, I'm using goto.  So sue me.
         save_max_label = all.sd->max_label;
         all.sd->max_label = hidden_max_activation;
 
-        for (size_t i = n.k; i > 0; --i) {
-          if (! dropped_out[i-1]) {
+        for (unsigned int i = 0; i < n.k; ++i) {
+          update_example_indicies (all.audit, ec, n.increment);
+          if (! dropped_out[i]) {
             float sigmah = 
               n.output_layer.atomics[nn_output_namespace][i].x / dropscale;
             float sigmahprime = dropscale * (1.0f - sigmah * sigmah);
-            float nu = all.reg.weight_vector[n.output_layer.atomics[nn_output_namespace][i].weight_index & all.weight_mask];
+            float nu = all.reg.weight_vector[n.output_layer.atomics[nn_output_namespace][i].weight_index & all.reg.weight_mask];
             float gradhw = 0.5f * nu * gradient * sigmahprime;
 
-            ld->label = GD::finalize_prediction (all, hidden_units[i-1] - gradhw);
-            if (ld->label != hidden_units[i-1]) {
-              ec->partial_prediction = 0.;
-              n.base.learn(&all,n.base.data,ec);
-            }
-          }
-          if (i != 1) {
-            update_example_indicies(all.audit, ec, -n.increment);
+            ld->label = GD::finalize_prediction (all, hidden_units[i] - gradhw);
+            if (ld->label != hidden_units[i]) 
+              n.base.learn(ec);
           }
         }
+        update_example_indicies (all.audit, ec, -n.k*n.increment);
 
         all.loss = save_loss;
         all.set_minmax = save_set_minmax;
         all.sd->min_label = save_min_label;
         all.sd->max_label = save_max_label;
       }
-      else 
-        update_example_indicies(all.audit, ec, -(n.k-1)*n.increment);
     }
-    else 
-      update_example_indicies(all.audit, ec, -(n.k-1)*n.increment);
 
     ld->label = save_label;
 
@@ -229,8 +237,6 @@ CONVERSE: // That's right, I'm using goto.  So sue me.
 
     if (n.dropout && ! converse)
       {
-        update_example_indicies (all.audit, ec, (n.k-1)*n.increment);
-
         for (unsigned int i = 0; i < n.k; ++i)
           {
             dropped_out[i] = ! dropped_out[i];
@@ -245,20 +251,19 @@ CONVERSE: // That's right, I'm using goto.  So sue me.
     ec->loss = save_ec_loss;
   }
 
-  void learn(void*a, void* d,example* ec) {
-    vw* all = (vw*)a;
+  void learn(void* d,example* ec) {
     nn* n = (nn*)d;
+    vw* all = n->all;
     learn_with_output(*all, *n, ec, false);
   }
 
-  void drive_nn(void *in, void* d)
+  void drive_nn(vw *all, void* d)
   {
-    vw* all = (vw*)in;
     nn* n = (nn*)d;
     example* ec = NULL;
     while ( true )
       {
-        if ((ec = get_example(all->p)) != NULL)//semiblocking operation.
+        if ((ec = VW::get_example(all->p)) != NULL)//semiblocking operation.
           {
             learn_with_output(*all, *n, ec, all->raw_prediction > 0);
             int save_raw_prediction = all->raw_prediction;
@@ -273,19 +278,20 @@ CONVERSE: // That's right, I'm using goto.  So sue me.
       }
   }
 
-  void finish(void* a, void* d)
+  void finish(void* d)
   {
     nn* n =(nn*)d;
-    n->base.finish(a,n->base.data);
+    n->base.finish();
     delete n->squared_loss;
     free (n->output_layer.indices.begin);
     free (n->output_layer.atomics[nn_output_namespace].begin);
     free(n);
   }
 
-  void parse_flags(vw& all, std::vector<std::string>&opts, po::variables_map& vm, po::variables_map& vm_file)
+  learner setup(vw& all, std::vector<std::string>&opts, po::variables_map& vm, po::variables_map& vm_file)
   {
     nn* n = (nn*)calloc(1,sizeof(nn));
+    n->all = &all;
 
     po::options_description desc("NN options");
     desc.add_options()
@@ -365,43 +371,61 @@ CONVERSE: // That's right, I'm using goto.  So sue me.
                 << (all.training ? "training" : "testing") 
                 << std::endl;
 
-    learner t = {n,drive_nn,learn,finish,all.l.save_load};
     n->base = all.l;
-    all.l = t;
 
-    all.base_learner_nb_w *= (n->inpass) ? n->k + 1 : n->k;
-    n->increment = ((uint32_t)all.length()/all.base_learner_nb_w) * all.stride;
+    n->increment = all.reg.stride * all.weights_per_problem;
+    all.weights_per_problem *= n->k + 1;
 
+    n->finished_setup = false;
+    n->squared_loss = getLossFunction (0, "squared", 0);
+
+    n->xsubi = 0;
+
+    if (vm.count("random_seed"))
+      n->xsubi = vm["random_seed"].as<size_t>();
+
+    n->save_xsubi = n->xsubi;
+
+    learner l(n,drive_nn,learn,finish,all.l.sl);
+    return l;
+  }
+
+  void finish_setup (nn* n, vw& all)
+  {
     bool initialize = true;
 
     // TODO: output_layer audit
 
     memset (&n->output_layer, 0, sizeof (n->output_layer));
     n->output_layer.indices.push_back(nn_output_namespace);
-    feature output = {1., nn_constant*all.stride};
-    n->output_layer.atomics[nn_output_namespace].push_back(output);
-    initialize &= (all.reg.weight_vector[n->output_layer.atomics[nn_output_namespace][0].weight_index & all.weight_mask] == 0);
+    feature output = {1., nn_constant*all.reg.stride};
 
     for (unsigned int i = 0; i < n->k; ++i)
       {
-        output.weight_index += all.stride;
         n->output_layer.atomics[nn_output_namespace].push_back(output);
-        initialize &= (all.reg.weight_vector[n->output_layer.atomics[nn_output_namespace][i+1].weight_index & all.weight_mask] == 0);
+        initialize &= (all.reg.weight_vector[output.weight_index & all.reg.weight_mask] == 0);
+        ++n->output_layer.num_features;
+        output.weight_index += n->increment;
       }
 
-    n->output_layer.num_features = n->k + 1;
+    if (! n->inpass) 
+      {
+        n->output_layer.atomics[nn_output_namespace].push_back(output);
+        initialize &= (all.reg.weight_vector[output.weight_index & all.reg.weight_mask] == 0);
+        ++n->output_layer.num_features;
+      }
+
     n->output_layer.in_use = true;
 
     if (initialize) {
-      if (! all.quiet) 
-        std::cerr << "randomly initializing neural network output weights and hidden bias" << std::endl;
-
       // output weights
 
       float sqrtk = sqrt ((float)n->k);
-      for (unsigned int i = 0; i <= n->k; ++i)
+      for (feature* x = n->output_layer.atomics[nn_output_namespace].begin; 
+           x != n->output_layer.atomics[nn_output_namespace].end; 
+           ++x)
         {
-          weight* w = &all.reg.weight_vector[n->output_layer.atomics[nn_output_namespace][i].weight_index & all.weight_mask];
+          weight* w = &all.reg.weight_vector[x->weight_index & all.reg.weight_mask];
 
           w[0] = (float) (frand48 () - 0.5) / sqrtk;
 
@@ -412,22 +436,15 @@ CONVERSE: // That's right, I'm using goto.  So sue me.
 
       // hidden biases
 
-      unsigned int weight_index = constant * all.stride;
+      unsigned int weight_index = constant * all.reg.stride;
 
       for (unsigned int i = 0; i < n->k; ++i)
         {
-          all.reg.weight_vector[weight_index & all.weight_mask] = (float) (frand48 () - 0.5);
           weight_index += n->increment;
+          all.reg.weight_vector[weight_index & all.reg.weight_mask] = (float) (frand48 () - 0.5);
         }
     }
 
-    n->squared_loss = getLossFunction (0, "squared", 0);
-
-    n->xsubi = 0;
-
-    if (vm.count("random_seed"))
-      n->xsubi = vm["random_seed"].as<size_t>();
-
-    n->save_xsubi = n->xsubi;
+    n->finished_setup = true;
   }
 }

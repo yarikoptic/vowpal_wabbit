@@ -88,12 +88,13 @@ void binary_print_result(int f, float res, float weight, v_array<char> tag)
     }
 }
 
-void print_tag(std::stringstream& ss, v_array<char> tag)
+int print_tag(std::stringstream& ss, v_array<char> tag)
 {
   if (tag.begin != tag.end){
     ss << ' ';
     ss.write(tag.begin, sizeof(char)*tag.size());
-  }  
+  } 
+  return tag.begin != tag.end;
 }
 
 void print_result(int f, float res, float weight, v_array<char> tag)
@@ -148,7 +149,8 @@ void active_print_result(int f, float res, float weight, v_array<char> tag)
       char temp[30];
       sprintf(temp, "%f", res);
       ss << temp;
-      print_tag(ss, tag);
+      if(!print_tag(ss, tag))
+          ss << ' ';
       if(weight >= 0)
 	{
 	  sprintf(temp, " %f", weight);
@@ -200,10 +202,33 @@ void set_mm(shared_data* sd, float label)
 void noop_mm(shared_data* sd, float label)
 {}
 
-void vw::learn(void* a, example* ec)
+void vw::learn(example* ec)
 {
-  vw* all = (vw*)a;
-  all->l.learn(a,all->l.data,ec);
+  this->l.learn(ec);
+}
+
+void compile_gram(vector<string> grams, uint32_t* dest, char* descriptor, bool quiet)
+{
+  for (size_t i = 0; i < grams.size(); i++)
+    {
+      string ngram = grams[i];
+      if ( isdigit(ngram[0]) )
+	{
+	  int n = atoi(ngram.c_str());
+	  if (!quiet)
+	    cerr << "Generating " << n << "-" << descriptor << " for all namespaces." << endl;
+	  for (size_t j = 0; j < 256; j++)
+	    dest[j] = n;
+	}
+      else if ( ngram.size() == 1)
+	cout << "You must specify the namespace index before the n" << endl;
+      else {
+	int n = atoi(ngram.c_str()+1);
+	dest[(uint32_t)ngram[0]] = n;
+	if (!quiet)
+	  cerr << "Generating " << n << "-" << descriptor << " for " << ngram[0] << " namespaces." << endl;
+      }
+    }
 }
 
 vw::vw()
@@ -220,10 +245,11 @@ vw::vw()
   reg_mode = 0;
 
   current_pass = 0;
+  current_command = 0;
 
   bfgs = false;
   hessian_on = false;
-  stride = 1;
+  reg.stride = 1;
   num_bits = 18;
   default_bits = true;
   daemon = false;
@@ -236,12 +262,12 @@ vw::vw()
   m = 15; 
   save_resume = false;
 
-  l = GD::get_learner();
+  l = GD::setup(*this);
   scorer = l;
 
   set_minmax = set_mm;
 
-  base_learner_nb_w = 1;
+  weights_per_problem = 1;
 
   power_t = 0.5;
   eta = 0.5; //default learning rate for normalized adaptive updates, this is switched to 10 by default for the other updates (see parse_args.cc)
@@ -280,13 +306,18 @@ vw::vw()
   total = 1;
   node = 0;
 
-  ngram = 0;
-  skips = 0;
+  for (size_t i = 0; i < 256; i++)
+    {
+      ngram[i] = 0;
+      skips[i] = 0;
+    }
 
   //by default use invariant normalized adaptive updates
   adaptive = true;
   normalized_updates = true;
   invariant_updates = true;
+  
+  l = GD::setup(*this);
 
   normalized_sum_norm_x = 0.;
   normalized_idx = 2;
@@ -295,7 +326,6 @@ vw::vw()
   audit = false;
   active = false;
   active_c0 = 8.;
-  active_simulation = false;
   reg.weight_vector = NULL;
   pass_length = (size_t)-1;
   passes_complete = 0;
@@ -304,4 +334,6 @@ vw::vw()
 
   stdin_off = false;
   do_reset_source = false;
+
+  max_examples = (size_t)-1;
 }

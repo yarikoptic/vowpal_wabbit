@@ -345,9 +345,10 @@ namespace Searn
     uint32_t increment; //for policy offset
     
     learner base;
+    vw* all;
   };
 
-  void drive(void*in, void*d);
+  void drive(vw* all, void*d);
   
   void simple_print_example_features(vw&all, example *ec)
   {
@@ -355,7 +356,7 @@ namespace Searn
       {
         feature* end = ec->atomics[*i].end;
         for (feature* f = ec->atomics[*i].begin; f!= end; f++) {
-          cerr << "\t" << f->weight_index << ":" << f->x << ":" << all.reg.weight_vector[f->weight_index & all.weight_mask];
+          cerr << "\t" << f->weight_index << ":" << f->x << ":" << all.reg.weight_vector[f->weight_index & all.reg.weight_mask];
         }
       }
     cerr << endl;
@@ -521,17 +522,17 @@ namespace Searn
 
 
 
-  void learn(void*in, void*d, example *ec)
+  void learn(void*d, example *ec)
   {
     //vw*all = (vw*)in;
     // TODO
   }
 
-  void finish(void*in, void*d)
+  void finish(void* d)
   {
     searn* s = (searn*)d;
-    s->base.finish(in,s->base.data);
-    vw*all = (vw*)in;
+    vw* all = s->all;
+    s->base.finish();
     // free everything
     if (s->task.finalize != NULL)
       s->task.finalize();
@@ -539,7 +540,7 @@ namespace Searn
     free(s);
   }
 
-  void parse_flags(vw&all, std::vector<std::string>&opts, po::variables_map& vm, po::variables_map& vm_file)
+  learner setup(vw&all, std::vector<std::string>&opts, po::variables_map& vm, po::variables_map& vm_file)
   {
     searn* s = (searn*)calloc(1,sizeof(searn));
 
@@ -806,13 +807,14 @@ namespace Searn
     //use cmd_string_replace_value in case we already loaded a predictor which had a value stored for --searn_total_nb_policies
     VW::cmd_string_replace_value(all.options_from_file,"--searn_total_nb_policies", ss2.str());
 
-    all.base_learner_nb_w *= s->total_number_of_policies;
-    s->increment = ((uint32_t)all.length() / all.base_learner_nb_w) * all.stride;
+    all.weights_per_problem *= s->total_number_of_policies;
+    s->increment = ((uint32_t)all.length() / all.weights_per_problem) * all.reg.stride;
     //cerr << "searn increment = " << s->increment << endl;
-    
-    learner l = {s, drive, learn, finish, all.l.save_load};
+
+    learner l(s, drive, learn, finish, all.l.sl);
     s->base = all.l;
-    all.l = l;
+    s->all = & all;
+    return l;
   }
 
   uint32_t searn_predict(vw&all, searn& s, state s0, size_t step, bool allow_oracle, bool allow_current, v_array< pair<uint32_t,float> >* partial_predictions)  // TODO: partial_predictions
@@ -864,7 +866,7 @@ namespace Searn
       }
       //cerr << "searn>";
       //simple_print_example_features(all,ec);
-      s.base.learn(&all,s.base.data,ec); 
+      s.base.learn(ec); 
       s.total_predictions_made++;  
       s.searn_num_features += ec->num_features;
       uint32_t final_prediction = (uint32_t)ec->final_prediction;
@@ -885,10 +887,10 @@ namespace Searn
         s.task.cs_ldf_example(all, s0, action, ec, true);
         //cerr << "created example: " << ec << ", label: " << ec->ld << endl;
         SearnUtil::add_policy_offset(all, ec, s.increment, policy);
-        s.base.learn(&all,s.base.data,ec);  s.total_predictions_made++;  s.searn_num_features += ec->num_features;
+        s.base.learn(ec);  s.total_predictions_made++;  s.searn_num_features += ec->num_features;
         //cerr << "base_learned on example: " << ec << endl;
         s.empty_example->in_use = true;
-        s.base.learn(&all,s.base.data,s.empty_example);
+        s.base.learn(s.empty_example);
         //cerr << "base_learned on empty example: " << s.empty_example << endl;
         SearnUtil::remove_policy_offset(all, ec, s.increment, policy);
 
@@ -1127,7 +1129,7 @@ namespace Searn
  
       SearnUtil::add_policy_offset(all, ec, s.increment, s.current_policy);
 	  
-	  s.base.learn(&all,s.base.data,ec);
+	  s.base.learn(ec);
       SearnUtil::remove_policy_offset(all, ec, s.increment, s.current_policy);
       ec->ld = old_label;
       s.task.cs_example(all, s0, ec, false);
@@ -1158,12 +1160,12 @@ namespace Searn
         s.global_example_set[k-1]->ld = (void*)(&s.new_labels[k-1]);
         SearnUtil::add_policy_offset(all, s.global_example_set[k-1], s.increment, s.current_policy);
         if (PRINT_DEBUG_INFO) { cerr << "add_policy_offset, s.max_action=" << s.max_action << ", total_number_of_policies=" << s.total_number_of_policies << ", current_policy=" << s.current_policy << endl;}
-        s.base.learn(&all,s.base.data,s.global_example_set[k-1]);
+        s.base.learn(s.global_example_set[k-1]);
       }
 
       //      cerr << "============================ (empty = " << s.empty_example << ")" << endl;
       s.empty_example->in_use = true;
-      s.base.learn(&all,s.base.data,s.empty_example);
+      s.base.learn(s.empty_example);
 
       for (uint32_t k=1; k<=s.max_action; k++) {
         if (!s.rollout[k-1].alive) break;
@@ -1284,48 +1286,47 @@ namespace Searn
       do_actual_learning(all, s);
     } else {  
       // is multiline
-      if (s.ec_seq.size() >= all.p->ring_size - 2) { // give some wiggle room
+      if (ec->end_pass || OAA::example_is_newline(ec) || s.ec_seq.size() >= all.p->ring_size - 2) { // give some wiggle room
+	if (s.ec_seq.size() >= all.p->ring_size - 2)
         std::cerr << "warning: length of sequence at " << ec->example_counter << " exceeds ring size; breaking apart" << std::endl;
         do_actual_learning(all, s);
-      }
-
-      if (OAA::example_is_newline(ec)) {
-        do_actual_learning(all, s);
-        //CSOAA_LDF::global_print_newline(all);
+	
+	if (ec->end_pass)
+	  {
+	    is_real_example = false;
+	    s.read_example_last_pass++;
+	    s.passes_since_new_policy++;
+	    if (s.passes_since_new_policy >= s.passes_per_policy) {
+	      s.passes_since_new_policy = 0;
+	      if(all.training)
+		s.current_policy++;
+	      if (s.current_policy > s.total_number_of_policies) {
+		std::cerr << "internal error (bug): too many policies; not advancing" << std::endl;
+		s.current_policy = s.total_number_of_policies;
+	      }
+	      //reset searn_trained_nb_policies in options_from_file so it is saved to regressor file later
+	      std::stringstream ss;
+	      ss << s.current_policy;
+	      VW::cmd_string_replace_value(all.options_from_file,"--searn_trained_nb_policies", ss.str());
+	    }
+	  }
+	
 	VW::finish_example(all, ec);
         is_real_example = false;
-      } else {
-        s.ec_seq.push_back(ec);
       }
+      else
+	s.ec_seq.push_back(ec);
     }
-
+    
     // for both single and multiline
     if (is_real_example) {
       s.read_example_this_loop++;
       s.read_example_last_id = ec->example_counter;
-      if (ec->pass != s.read_example_last_pass) {
-        s.read_example_last_pass = ec->pass;
-        s.passes_since_new_policy++;
-        if (s.passes_since_new_policy >= s.passes_per_policy) {
-          s.passes_since_new_policy = 0;
-          if(all.training)
-            s.current_policy++;
-          if (s.current_policy > s.total_number_of_policies) {
-            std::cerr << "internal error (bug): too many policies; not advancing" << std::endl;
-            s.current_policy = s.total_number_of_policies;
-          }
-          //reset searn_trained_nb_policies in options_from_file so it is saved to regressor file later
-          std::stringstream ss;
-          ss << s.current_policy;
-          VW::cmd_string_replace_value(all.options_from_file,"--searn_trained_nb_policies", ss.str());
-        }
-      }
     }
   }
 
-  void drive(void*in, void*d)
+  void drive(vw* all, void*d)
   {
-    vw*all = (vw*)in;
     // initialize everything
     searn* s = (searn*)d;
 
@@ -1340,7 +1341,7 @@ namespace Searn
     example* ec = NULL;
     s->read_example_this_loop = 0;
     while (true) {
-      if ((ec = get_example(all->p)) != NULL) { // semiblocking operation
+      if ((ec = VW::get_example(all->p)) != NULL) { // semiblocking operation
         process_next_example(*all, *s, ec);
       } else if (parser_done(all->p)) {
         if (!s->is_singleline)
@@ -1420,7 +1421,7 @@ namespace ImperativeSearn {
     ec->ld = (void*)&valid_labels;
     SearnUtil::add_policy_offset(all, ec, srn.increment, pol);
 
-    srn.base.learn(&all,srn.base.data, ec);
+    srn.base.learn(ec);
     srn.total_predictions_made++;
     srn.num_features += ec->num_features;
     uint32_t final_prediction = (uint32_t)ec->final_prediction;
@@ -1630,7 +1631,7 @@ namespace ImperativeSearn {
       void* old_label = ec[0]->ld;
       ec[0]->ld = (void*)&labels;
       SearnUtil::add_policy_offset(all, ec[0], srn.increment, srn.current_policy);
-      srn.base.learn(&all,srn.base.data, ec[0]);
+      srn.base.learn(ec[0]);
       SearnUtil::remove_policy_offset(all, ec[0], srn.increment, srn.current_policy);
       ec[0]->ld = old_label;
       srn.total_examples_generated++;
@@ -1801,32 +1802,20 @@ namespace ImperativeSearn {
     }
   }
 
-  void searn_learn(void*in, void*d, example*ec) {
-    vw* all = (vw*)in;
+  void searn_learn(void*d, example*ec) {
     searn *srn = (searn*)d;
+    vw* all = srn->all;
 
-    if (srn->ec_seq.size() >= all->p->ring_size - 2) { // give some wiggle room
-      std::cerr << "warning: length of sequence at " << ec->example_counter << " exceeds ring size; breaking apart" << std::endl;
-      do_actual_learning(*all, *srn);
-      clear_seq(*all, *srn);
-    }
-    
     bool is_real_example = true;
+    if (ec->end_pass || OAA::example_is_newline(ec) || srn->ec_seq.size() >= all->p->ring_size - 2) { 
+      if (srn->ec_seq.size() >= all->p->ring_size - 2) { // give some wiggle room
+	std::cerr << "warning: length of sequence at " << ec->example_counter << " exceeds ring size; breaking apart" << std::endl;
+    }
 
-    if (OAA::example_is_newline(ec)) {
       do_actual_learning(*all, *srn);
       clear_seq(*all, *srn);
-      VW::finish_example(*all, ec);
-      is_real_example = false;
-    } else {
-      srn->ec_seq.push_back(ec);
-    }
-        
-    if (is_real_example) {
-      srn->read_example_this_loop++;
-      srn->read_example_last_id = ec->example_counter;
-      if (ec->pass != srn->read_example_last_pass) {
-        srn->read_example_last_pass = ec->pass;
+      if (ec->end_pass) {
+        srn->read_example_last_pass++;
         srn->passes_since_new_policy++;
         if (srn->passes_since_new_policy >= srn->passes_per_policy) {
           srn->passes_since_new_policy = 0;
@@ -1842,11 +1831,20 @@ namespace ImperativeSearn {
           VW::cmd_string_replace_value(all->options_from_file,"--searn_trained_nb_policies", ss.str());
         }
       }
+      
+      VW::finish_example(*all, ec);
+      is_real_example = false;
+    } else {
+      srn->ec_seq.push_back(ec);
+    }
+    
+    if (is_real_example) {
+      srn->read_example_this_loop++;
+      srn->read_example_last_id = ec->example_counter;
     }
   }
-
-  void searn_drive(void*in, void *d) {
-    vw* all = (vw*)in;
+  
+  void searn_drive(vw* all, void *d) {
     searn *srn = (searn*)d;
 
     const char * header_fmt = "%-10s %-10s %8s %15s %24s %22s %8s %5s %5s %15s %15s\n";
@@ -1858,8 +1856,8 @@ namespace ImperativeSearn {
     example* ec = NULL;
     srn->read_example_this_loop = 0;
     while (true) {
-      if ((ec = get_example(all->p)) != NULL) { // semiblocking operation
-        searn_learn(in,d, ec);
+      if ((ec = VW::get_example(all->p)) != NULL) { // semiblocking operation
+        searn_learn(d, ec);
       } else if (parser_done(all->p)) {
         do_actual_learning(*all, *srn);
         break;
@@ -1902,11 +1900,10 @@ namespace ImperativeSearn {
     srn.total_predictions_made = 0;
   }
 
-  void searn_finish(void*in, void* d)
+  void searn_finish(void* d)
   {
-    vw*all = (vw*)in;
     searn *srn = (searn*)d;
-
+    vw* all = srn->all;
     //cerr << "searn_finish" << endl;
 
     srn->ec_seq.delete_v();
@@ -1925,7 +1922,7 @@ namespace ImperativeSearn {
     if (srn->task->finish != NULL)
       srn->task->finish(*all);
     if (srn->task->finish != NULL)
-      srn->base.finish(all, srn->base.data);
+      srn->base.finish();
   }
 
   void ensure_param(float &v, float lo, float hi, float def, const char* string) {
@@ -1958,9 +1955,10 @@ namespace ImperativeSearn {
   bool float_equal(float a, float b) { return fabs(a-b) < 1e-6; }
   bool uint32_equal(uint32_t a, uint32_t b) { return a==b; }
 
-  void parse_flags(vw&all, std::vector<std::string>&opts, po::variables_map& vm, po::variables_map& vm_file)
+  learner setup(vw&all, std::vector<std::string>&opts, po::variables_map& vm, po::variables_map& vm_file)
   {
     searn* srn = (searn*)calloc(1,sizeof(searn));
+    srn->all = &all;
 
     searn_initialize(all, *srn);
 
@@ -2042,8 +2040,8 @@ namespace ImperativeSearn {
     ss1 << srn->current_policy;           VW::cmd_string_replace_value(all.options_from_file,"--searn_trained_nb_policies", ss1.str()); 
     ss2 << srn->total_number_of_policies; VW::cmd_string_replace_value(all.options_from_file,"--searn_total_nb_policies",   ss2.str());
 
-    all.base_learner_nb_w *= srn->total_number_of_policies;
-    srn->increment = ((uint32_t)all.length() / all.base_learner_nb_w) * all.stride;
+    all.weights_per_problem *= srn->total_number_of_policies;
+    srn->increment = ((uint32_t)all.length() / all.weights_per_problem) * all.reg.stride;
 
     if (task_string.compare("sequence") == 0) {
       searn_task* mytask = (searn_task*)calloc(1, sizeof(searn_task));
@@ -2058,11 +2056,10 @@ namespace ImperativeSearn {
     }
 
     srn->task->initialize(all, srn->A);
-
     
-    learner l = {srn, searn_drive, searn_learn, searn_finish, all.l.save_load};
+    learner l(srn, searn_drive, searn_learn, searn_finish, all.l.sl);
     srn->base = all.l;
-    all.l = l;
+    return l;
   }
 }
 /*

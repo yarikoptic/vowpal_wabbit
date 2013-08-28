@@ -110,8 +110,10 @@ typedef float weight;
 
 struct regressor {
   weight* weight_vector;
+  size_t weight_mask; // (stride*(1 << num_bits) -1)
+  uint32_t stride;
 };
-           
+
 struct vw {
   shared_data* sd;
 
@@ -127,11 +129,12 @@ struct vw {
   learner l;//the top level leaner
   learner scorer;//a scoring function
 
-  void learn(void*, example*);
+  void learn(example*);
 
   void (*set_minmax)(shared_data* sd, float label);
 
   size_t current_pass;
+  size_t current_command;
 
   uint32_t num_bits; // log_2 of the number of features.
   bool default_bits;
@@ -158,9 +161,8 @@ struct vw {
   bool searn;
   void* /*ImperativeSearn::searn_struct*/ searnstr;
 
-  uint32_t base_learner_nb_w; //this stores the current number of "weight vector" required by the based learner, which is used to compute offsets when composing reductions
+  uint32_t weights_per_problem; //this stores the current number of "weight vector" required by the based learner, which is used to compute offsets when composing reductions
 
-  uint32_t stride;
   int stdout_fileno;
 
   std::string per_feature_regularizer_input;
@@ -180,13 +182,15 @@ struct vw {
   size_t numpasses;
   size_t passes_complete;
   size_t parse_mask; // 1 << num_bits -1
-  size_t weight_mask; // (stride*(1 << num_bits) -1)
   std::vector<std::string> pairs; // pairs of features to cross.
   std::vector<std::string> triples; // triples of features to cross.
   bool ignore_some;
   bool ignore[256];//a set of namespaces to ignore
-  size_t ngram;//ngrams to generate.
-  size_t skips;//skips in ngrams.
+
+  std::vector<std::string> ngram_strings; // pairs of features to cross.
+  std::vector<std::string> skip_strings; // triples of features to cross.
+  uint32_t ngram[256];//ngrams to generate.
+  uint32_t skips[256];//skips in ngrams.
   bool audit;//should I print lots of debugging information?
   bool quiet;//Should I suppress updates?
   bool training;//Should I train if label data is available?
@@ -240,6 +244,8 @@ struct vw {
   std::string final_regressor_name;
   regressor reg;
 
+  size_t max_examples; // for TLC
+
   vw();
 };
 
@@ -249,5 +255,7 @@ void active_print_result(int f, float res, float weight, v_array<char> tag);
 void noop_mm(shared_data*, float label);
 void print_lda_result(vw& all, int f, float* res, float weight, v_array<char> tag);
 void get_prediction(int sock, float& res, float& weight);
+void compile_gram(vector<string> grams, uint32_t* dest, char* descriptor, bool quiet);
 
 #endif
+ 

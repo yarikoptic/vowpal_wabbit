@@ -19,7 +19,7 @@ using namespace std;
 
 void accumulate(vw& all, string master_location, regressor& reg, size_t o) {
   uint32_t length = 1 << all.num_bits; //This is size of gradient
-  size_t stride = all.stride;
+  size_t stride = all.reg.stride;
   float* local_grad = new float[length];
   weight* weights = reg.weight_vector;
   for(uint32_t i = 0;i < length;i++) 
@@ -43,7 +43,7 @@ float accumulate_scalar(vw& all, string master_location, float local_sum) {
 
 void accumulate_avg(vw& all, string master_location, regressor& reg, size_t o) {
   uint32_t length = 1 << all.num_bits; //This is size of gradient
-  size_t stride = all.stride;
+  size_t stride = all.reg.stride;
   float* local_grad = new float[length];
   weight* weights = reg.weight_vector;
   float numnodes = 1.;
@@ -81,25 +81,25 @@ void accumulate_weighted_avg(vw& all, string master_location, regressor& reg) {
     return;
   }
   uint32_t length = 1 << all.num_bits; //This is size of gradient
-  size_t stride = all.stride;
+  size_t stride = all.reg.stride;
   weight* weights = reg.weight_vector;
   float* local_weights = new float[length];
 
   for(uint32_t i = 0;i < length;i++) 
-    local_weights[i] = sqrt(weights[stride*i+1]*weights[stride*i+1]-1);
+    local_weights[i] = sqrt(weights[stride*i+1]*weights[stride*i+1]);
   
   all_reduce(local_weights, length, master_location, all.unique_id, all.total, all.node, all.socks);
 
   for(uint32_t i = 0;i < length;i++) 
     if(local_weights[i] > 0) {
-      float ratio = sqrt(weights[stride*i+1]*weights[stride*i+1]-1)/local_weights[i];
+      float ratio = sqrt(weights[stride*i+1]*weights[stride*i+1])/local_weights[i];
       weights[stride*i] *= ratio;
       weights[stride*i+1] *= ratio;
     }
     else 
       weights[stride*i] = 0; 
 
-  all_reduce(weights, 2*length, master_location, all.unique_id, all.total, all.node, all.socks);
+  all_reduce(weights, (int)stride*length, master_location, all.unique_id, all.total, all.node, all.socks);
 
   delete[] local_weights;
 }
