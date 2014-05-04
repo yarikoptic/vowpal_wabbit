@@ -3,8 +3,8 @@ Copyright (c) by respective owners including Yahoo!, Microsoft, and
 individual contributors. All rights reserved.  Released under a BSD
 license as described in the file LICENSE.
  */
-#ifndef PP
-#define PP
+#ifndef PARSE_PRIMITIVES_H
+#define PARSE_PRIMITIVES_H
 
 #include<iostream>
 #include <stdint.h>
@@ -47,6 +47,17 @@ struct shared_data {
   float min_label;//minimum label encountered
   float max_label;//maximum label encountered
 
+  //for holdout
+  double weighted_holdout_examples;
+  double weighted_holdout_examples_since_last_dump;
+  double holdout_sum_loss_since_last_dump;
+  double holdout_sum_loss;
+  //for best model selection
+  double holdout_best_loss;
+  double weighted_holdout_examples_since_last_pass;//reserved for best predictor selection
+  double holdout_sum_loss_since_last_pass;
+  size_t holdout_best_pass; 
+
   bool binary_label;
   uint32_t k;
 };
@@ -60,7 +71,6 @@ struct label_parser {
   size_t (*read_cached_label)(shared_data*, void*, io_buf& cache);
   void (*delete_label)(void*);
   float (*get_weight)(void*);
-  float (*get_initial)(void*);
   void (*copy_label)(void*&,void*); // copy_label(dst,src) performs a DEEP copy of src into dst (dst is allocated correctly).  if this function is NULL, then we assume that a memcpy of size label_size is sufficient, so you need only specify this function if your label constains, for instance, pointers (otherwise you'll get double-free errors)
   size_t label_size;
 };
@@ -84,14 +94,16 @@ struct parser {
   size_t ring_size;
   uint64_t parsed_examples; // The index of the parsed example.
   uint64_t local_example_number; 
+  uint32_t in_pass_counter;
   example* examples;
   uint64_t used_index;
+  bool emptylines_separate_examples; // true if you want to have holdout computed on a per-block basis rather than a per-line basis
   MUTEX examples_lock;
   CV example_available;
   CV example_unused;
   MUTEX output_lock;
   CV output_done;
-
+  
   bool done;
   v_array<size_t> gram_mask;
 
@@ -104,11 +116,11 @@ struct parser {
 
   v_array<substring> parse_name;
 
-  label_parser* lp;  // moved from vw
+  label_parser lp;  // moved from vw
 };
 
 //chop up the string into a v_array of substring.
-void tokenize(char delim, substring s, v_array<substring> &ret);
+void tokenize(char delim, substring s, v_array<substring> &ret, bool allow_empty=false);
 
 inline char* safe_index(char *start, char v, char *max)
 {
@@ -130,9 +142,12 @@ inline void print_substring(substring s)
 inline float parseFloat(char * p, char **end)
 {
   char* start = p;
-
+  
   if (!*p)
-    return 0;
+    {
+      *end = p;
+      return 0;
+    }
   int s = 1;
   while (*p == ' ') p++;
   
@@ -143,15 +158,18 @@ inline float parseFloat(char * p, char **end)
   float acc = 0;
   while (*p >= '0' && *p <= '9')
     acc = acc * 10 + *p++ - '0';
-  
+
   int num_dec = 0;
   if (*p == '.') {
-    p++;
-    while (*p >= '0' && *p <= '9') {
-      acc = acc *10 + (*p++ - '0') ;
-      num_dec++;
+    while (*(++p) >= '0' && *p <= '9') {
+      if (num_dec < 35)
+	{
+	  acc = acc *10 + (*p - '0');
+	  num_dec++;
+	}
     }
   }
+
   int exp_acc = 0;
   if(*p == 'e' || *p == 'E'){
     p++;
@@ -191,7 +209,15 @@ inline float float_of_substring(substring s)
 
 inline int int_of_substring(substring s)
 {
-  return atoi(std::string(s.begin, s.end-s.begin).c_str());
+  char* endptr = s.end;
+  int i = strtol(s.begin,&endptr,10);
+  if (endptr == s.begin && s.begin != s.end)  
+    {
+      std::cout << "warning: " << std::string(s.begin, s.end-s.begin).c_str() << " is not a good int, replacing with 0" << std::endl;
+      i = 0;
+    }
+
+  return i;
 }
 
 #endif

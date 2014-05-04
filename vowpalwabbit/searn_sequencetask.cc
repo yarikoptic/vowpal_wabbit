@@ -3,52 +3,161 @@ Copyright (c) by respective owners including Yahoo!, Microsoft, and
 individual contributors. All rights reserved.  Released under a BSD (revised)
 license as described in the file LICENSE.
  */
-#include <iostream>
-#include <float.h>
-#include <stdio.h>
-#include <math.h>
-#include <vector>
-#include "searn.h"
-#include "gd.h"
-#include "parser.h"
-#include "constant.h"
-#include "oaa.h"
-#include "csoaa.h"
 #include "searn_sequencetask.h"
-#include "vw.h"
+#include "multiclass.h"
+#include "memory.h"
+#include "example.h"
+#include "gd.h"
 
 namespace SequenceTask {
-  SearnUtil::history_info hinfo;
-  uint32_t seq_max_action = 1;
-  size_t constant_pow_length = 0;
-  uint32_t increment = 0;  // this is just for fake LDF
+  using namespace Searn;
 
-  struct seq_state {
-    // global stuff -- common to any state in a trajectory
-    example** ec_start;
-    size_t    length;
+  void initialize(searn& srn, size_t& num_actions, std::vector<std::string>&opts, po::variables_map& vm, po::variables_map& vm_file) {
+    srn.task_data            = NULL;  // we don't need any of our own data
+    srn.auto_history         = true;  // automatically add history features to our examples, please
+    srn.auto_hamming_loss    = true;  // please just use hamming loss on individual predictions -- we won't declare_loss
+    srn.examples_dont_change = true;  // we don't do any internal example munging
+  }
 
-    // trajectory-specific stuff
-    size_t    pos;
-    history   predictions;
-    size_t    predictions_hash;
-    float     cum_loss;
+  void finish(searn& srn) { }    // if we had task data, we'd want to free it here
 
-    // everything is zero based, so pos starts out at zero and is what
-    // we will predict NEXT.  this means that when pos==length we're
-    // done.
+  void structured_predict(searn& srn, example**ec, size_t len, stringstream*output_ss, stringstream*truth_ss) {
+    for (size_t i=0; i<len; i++) { //save state for optimization
+      srn.snapshot(i, 1, &i, sizeof(i), true);
+
+      MULTICLASS::mc_label* y = (MULTICLASS::mc_label*)ec[i]->ld;
+      size_t prediction = srn.predict(ec[i], NULL, y->label);
+
+      if (output_ss) (*output_ss) << prediction << ' ';
+      if (truth_ss ) (*truth_ss ) << (MULTICLASS::label_is_test(y) ? '?' : y->label) << ' ';
+    }
+  }
+}
+
+namespace OneOfManyTask {
+  using namespace Searn;
+
+  void initialize(searn& srn, size_t& num_actions, std::vector<std::string>&opts, po::variables_map& vm, po::variables_map& vm_file) {
+    srn.task_data            = NULL;  // we don't need any of our own data
+    srn.auto_history         = true;  // automatically add history features to our examples, please
+    srn.auto_hamming_loss    = false; // we will compute our own loss
+    srn.examples_dont_change = true;  // we don't do any internal example munging
+  }
+
+  void finish(searn& srn) { }    // if we had task data, we'd want to free it here
+
+  void structured_predict(searn& srn, example**ec, size_t len, stringstream*output_ss, stringstream*truth_ss) {
+    bool predicted_true_yet = false;
+    bool output_has_true    = false;
+    for (size_t i=0; i<len; i++) {
+      MULTICLASS::mc_label* y = (MULTICLASS::mc_label*)ec[i]->ld;
+      if (y->label == 2) output_has_true = true;
+    }
+        
+    for (size_t i=0; i<len; i++) {
+      // labels should be 1 or 2, and our output is MAX of all predicted values
+      srn.snapshot(i, 1, &i, sizeof(i), true); //save state for optimization
+      srn.snapshot(i, 2, &predicted_true_yet, sizeof(predicted_true_yet), false);  // not used for prediction
+
+      MULTICLASS::mc_label* y = (MULTICLASS::mc_label*)ec[i]->ld;
+      size_t prediction = srn.predict(ec[i], NULL, y->label);
+
+      float cur_loss = 0.;
+      if (prediction == 2) { // we predicted "yes"
+        if (!predicted_true_yet) { // and this is the first time
+          if (output_has_true) cur_loss = 0.;
+          else cur_loss = 1.;
+        } else { // we've predicted true earlier
+          if (output_has_true) cur_loss = 0.;
+          else cur_loss = 1.; // TODO: should this be zero? i.e., should we not get repeatedly punished?
+        }
+        predicted_true_yet = true;
+      } else { // we predicted "no"
+        if (!predicted_true_yet) { // no predictions of true at all
+          if ((i == len-1) && output_has_true)
+            cur_loss = 1.;  // totally hosed
+        } else { // we've predicted true in the past
+          // no loss
+        }
+      }
+      srn.declare_loss(1, cur_loss);
+
+      if (output_ss) (*output_ss) << prediction << ' ';
+      if (truth_ss ) (*truth_ss ) << (MULTICLASS::label_is_test(y) ? '?' : y->label) << ' ';
+    }
+  }
+}
+
+namespace SequenceSpanTask {
+  enum EncodingType { BIO, BILOU };
+// the format for the BIO encoding is:
+//     label     description
+//     1         "O" (out)
+//     n even    begin X, where X is defined by n/2
+//     n odd     in X, where X is (n-1)/2
+//   thus, valid transitions are:
+//     *       -> 1       (anything to OUT)
+//     *       -> n even  (anything in BEGIN X)
+//     n even  -> n+1     (BEGIN X to IN X)
+//     n odd>1 -> n       (IN X to IN X)
+// the format for the BILOU (begin, inside, last, out, unit-length) encoding is:
+//     label     description
+//     1         out
+//     n>1: let m=n-2:
+//       m % 4 == 0    unit-(m div 4)
+//       m % 4 == 1    begin-(m div 4)
+//       m % 4 == 2    in-(m div 4)
+//       m % 4 == 3    last-(m div 4)
+//   thus, valid transitions are:
+//     1     -> 1; 2, 6, 8, ...; 3, 7, 9, ...         out to { out, unit-Y, begin-Y }       1
+//     m%4=0 -> 1; 2, 6, 8, ..., 3, 7, 9, ...         unit-X to { out, unit-Y, begin-Y }    2, 6, 10, 14, ...
+//     m%4=1 -> m+1, m+2                              begin-X to { in-X, last-X }           3, 7, 11, 15, ...
+//     m%4=2 -> m, m+1                                in-X to { in-X, last-X }              4, 8, 12, 16, ...
+//     m%4=3 -> 1; 2, 6, 8, ...; 3, 7, 9, ...         last-X to { out, unit-Y, begin-Y }     5, 9, 13, 17, ...
+
+  using namespace Searn;
+
+  void convert_bio_to_bilou(example**ec, size_t len) {
+    for (size_t n=0; n<len; n++) {
+      MULTICLASS::mc_label* ylab = (MULTICLASS::mc_label*)ec[n]->ld;
+      uint32_t y = ylab->label;
+      uint32_t nexty = (n == len-1) ? 0 : ((MULTICLASS::mc_label*)ec[n+1]->ld)->label;
+      if (y == 1) { // do nothing
+      } else if (y % 2 == 0) { // this is a begin-X
+        if (nexty != y + 1) // should be unit
+          ylab->label = (y/2 - 1) * 4 + 2;  // from 2 to 2, 4 to 6, 6 to 10, etc.
+        else // should be begin-X
+          ylab->label = (y/2 - 1) * 4 + 3;  // from 2 to 3, 4 to 7, 6 to 11, etc.
+      } else if (y % 2 == 1) { // this is an in-X
+        if (nexty != y) // should be last
+          ylab->label = (y-1) * 2 + 1;  // from 3 to 5, 5 to 9, 7 to 13, etc.
+        else // should be in-X
+          ylab->label = (y-1) * 2;      // from 3 to 4, 5 to 8, 7 to 12, etc.
+      }
+      assert(ylab->label <= 13);
+    }
+  }
+
+  inline uint32_t bilou_to_bio(uint32_t y) {
+    return y / 2 + 1;  // out -> out, {unit,begin} -> begin; {in,last} -> in
+  }
+
+  struct task_data {
+    EncodingType encoding;
+    v_array<uint32_t> y_allowed;
+    v_array<uint32_t> only_two_allowed;  // used for BILOU encoding
   };
 
-  bool initialize(vw&all, std::vector<std::string>&opts, po::variables_map& vm, po::variables_map& vm_file)
-  {
-    SearnUtil::default_info(&hinfo);
+  void initialize(searn& srn, size_t& num_actions, std::vector<std::string>&opts, po::variables_map& vm, po::variables_map& vm_file) {
+    task_data * my_task_data = new task_data();
 
-    po::options_description desc("Searn[sequence] options");
-    desc.add_options()
-      ("searn_sequencetask_history",  po::value<size_t>(), "length of history to use")
-      ("searn_sequencetask_features", po::value<size_t>(), "length of history to pair with observed features")
-      ("searn_sequencetask_bigrams",                       "use bigrams from history")
-      ("searn_sequencetask_bigram_features",               "use bigrams from history paired with observed features");
+    po::options_description desc("Searn options");
+    desc.add_options()("searn_bilou", "switch to (internal) BILOU encoding instead of BIO encoding");
+    po::options_description add_desc_file("Searn options only available in regressor file");
+    add_desc_file.add_options()("searn_trained_nb_policies", po::value<size_t>(), "the number of trained policies in the regressor file");
+
+    po::options_description desc_file;
+    desc_file.add(desc).add(add_desc_file);
 
     po::parsed_options parsed = po::command_line_parser(opts).
       style(po::command_line_style::default_style ^ po::command_line_style::allow_guessing).
@@ -57,373 +166,166 @@ namespace SequenceTask {
     po::store(parsed, vm);
     po::notify(vm);
 
-    po::parsed_options parsed_file = po::command_line_parser(all.options_from_file_argc, all.options_from_file_argv).
+    po::parsed_options parsed_file = po::command_line_parser(srn.all->options_from_file_argc, srn.all->options_from_file_argv).
       style(po::command_line_style::default_style ^ po::command_line_style::allow_guessing).
-      options(desc).allow_unregistered().run();
+      options(desc_file).allow_unregistered().run();
     po::store(parsed_file, vm_file);
     po::notify(vm_file);
-
-    if( vm_file.count("searn") ) { //we loaded a predictor file which contains the options we should use for the sequence task
-      //load all params from file
-      if(vm_file.count("searn_sequencetask_history"))
-        hinfo.length = vm_file["searn_sequencetask_history"].as<size_t>();
-
-      if( vm_file.count("searn_sequencetask_features") )
-        hinfo.features = vm_file["searn_sequencetask_features"].as<size_t>(); 
-
-      if( vm_file.count("searn_sequencetask_bigrams") )
-        hinfo.bigrams = true;
- 
-      if( vm_file.count("searn_sequencetask_bigram_features") )
-        hinfo.bigram_features = true;
-
-      //check if there is a mismatch between what was specified in command line and alert user
-      if( vm.count("searn_sequencetask_history") && hinfo.length != vm["searn_sequencetask_history"].as<size_t>() )
-        std::cerr << "warning: you specified a different value for --searn_sequencetask_history than the one loaded from regressor. Pursuing with loaded value: " << hinfo.length << endl;
-
-      if( vm.count("searn_sequencetask_features") && hinfo.features != vm["searn_sequencetask_features"].as<size_t>() )
-        std::cerr << "warning: you specified a different value for --searn_sequencetask_features than the one loaded from regressor. Pursuing with loaded value: " << hinfo.features << endl;
-
-      if( vm.count("searn_sequencetask_bigrams") && !hinfo.bigrams )
-        std::cerr << "warning: you specified --searn_sequencetask_bigrams but loaded regressor not using bigrams. Pursuing without bigrams." << endl;
-
-      if( vm.count("searn_sequencetask_bigram_features") && !hinfo.bigram_features )
-        std::cerr << "warning: you specified --searn_sequencetask_bigram_features but loaded regressor not using bigram_features. Pursuing without bigram_features." << endl;
-
-      seq_max_action = (uint32_t)vm_file["searn"].as<size_t>();
-    }    
-    else {
-      if (vm.count("searn_sequencetask_bigrams")) {
-        hinfo.bigrams = true;
-        all.options_from_file.append(" --searn_sequencetask_bigrams");
-      }
-
-      if (vm.count("searn_sequencetask_history")) { 
-        hinfo.length = vm["searn_sequencetask_history"].as<size_t>();
-
-        std::stringstream ss;
-        ss << " --searn_sequencetask_history " << hinfo.length;
-        all.options_from_file.append(ss.str());
-      }
-
-      if (vm.count("searn_sequencetask_bigram_features")) {
-        hinfo.bigram_features = true;
-        all.options_from_file.append(" --searn_sequencetask_bigram_features");
-      }
-
-      if (vm.count("searn_sequencetask_features")) {
-        hinfo.features = vm["searn_sequencetask_features"].as<size_t>();
-
-        std::stringstream ss;
-        ss << " --searn_sequencetask_features " << hinfo.features;
-        all.options_from_file.append(ss.str());
-      }
-
-      seq_max_action = (uint32_t)vm["searn"].as<size_t>();
-    }
-
-    constant_pow_length = 1;
-    for (size_t i=0; i < hinfo.length; i++)
-      constant_pow_length *= quadratic_constant;
-
-    increment = ((uint32_t)all.length() * all.reg.stride + 132489)/seq_max_action;
-
-    return true;
-  }
-
-  bool final(state s0)
-  {
-    seq_state* s = (seq_state*)s0;
-    return s->pos >= s->length;
-  }
-
-  float loss(state s0)
-  {
-    return ((seq_state*)s0)->cum_loss;
-  }
-
-  void step(state s0, action a)
-  {
-    seq_state* s = (seq_state*)s0;
-
-    s->cum_loss += (oracle(s0) == a) ? 0.0f : 1.0f;
-
-    if (hinfo.length > 0) {
-      size_t old_val = s->predictions[0];
-      s->predictions_hash -= old_val * constant_pow_length;
-      s->predictions_hash += a;
-      s->predictions_hash *= quadratic_constant;
-      for (size_t i=1; i<hinfo.length; i++)
-        s->predictions[i-1] = s->predictions[i];
-      s->predictions[hinfo.length-1] = a;
-    }
-
-    s->pos = s->pos + 1;
-  }
-
-  action oracle(state s0)
-  {
-    seq_state* s = (seq_state*)s0;
-    return (action)(((OAA::mc_label*)s->ec_start[s->pos]->ld)->label);
-  }
-
-  state copy(state src0)
-  {
-    seq_state* src = (seq_state*)src0;
-    seq_state* dst = (seq_state*)SearnUtil::calloc_or_die(1, sizeof(seq_state));
-    //memcpy(dst, src, sizeof(seq_state));
-    dst->ec_start = src->ec_start;
-    dst->length   = src->length;
-    dst->pos      = src->pos;
-    dst->predictions_hash = src->predictions_hash;
-    dst->cum_loss = src->cum_loss;
-    dst->predictions = (history)SearnUtil::calloc_or_die(hinfo.length, sizeof(size_t));
-    for (size_t t=0; t<hinfo.length; t++)
-      dst->predictions[t] = src->predictions[t];
-
-    //    cerr << "copy returning s = " << dst << endl;
-    return (state)dst;
-  }
-
-  void finish(state s0)
-  {
-    seq_state* s = (seq_state*)s0;
-
-    //    cerr << "finish    with s = " << s << " and s->predictions = " << s->predictions << endl;
-    SearnUtil::free_it(s->predictions);
-    SearnUtil::free_it(s);
-  }
-
-  bool is_test_example(example**ec, size_t N) {
-    for (size_t n=0; n<N; n++) 
-      if (OAA::example_is_test(ec[n])) 
-	return 1;
-    return 0;
-  }
-
-
-  void start_state_multiline(example**ec, size_t len, state*s0)
-  {
-    seq_state* s = (seq_state*)SearnUtil::calloc_or_die(1, sizeof(seq_state));
-
-    s->ec_start = ec;
-    s->length   = len;
-    s->pos      = 0;
-    s->cum_loss = 0.;
-
-    s->predictions = (history)SearnUtil::calloc_or_die(hinfo.length, sizeof(size_t));
-    for (size_t t=0; t<hinfo.length; t++)
-      s->predictions[t] = 0;
-
-    s->predictions_hash = 0;
-
-    //    cerr << "ssml returning s = " << s << endl;
-
-    *s0 = s;
-  }
-
-
-  void cs_example(vw&all, state s0, example*&ec, bool create)
-  {
-    seq_state* s = (seq_state*)s0;
-    example* cur = s->ec_start[s->pos];
-    if (create) {
-      SearnUtil::add_history_to_example(all, &hinfo, cur, s->predictions);
-      ec = cur;
-    } else { // destroy
-      SearnUtil::remove_history_from_example(all, &hinfo, cur);
-      ec = NULL;
-    }
-  }
-
-  size_t hash(state s0)
-  {
-    seq_state* s = (seq_state*)s0;
-    return quadratic_constant * (s->pos + quadratic_constant * s->predictions_hash);
-  }
-  
-  bool equivalent(state a0, state b0)
-  {
-    seq_state* a = (seq_state*)a0;
-    seq_state* b = (seq_state*)b0;
-
-    if (a->pos != b->pos) return false;
-    if (a->predictions_hash != b->predictions_hash) return false;
-
-    for (size_t i=0; i<hinfo.length; i++)
-      if (a->predictions[i] != b->predictions[i])
-        return false;
-
-    return true;
-  }
-
-  using namespace std;
-  string to_string(state s0, bool return_truth, vector<action> actions)
-  {
-    seq_state* s = (seq_state*)s0;
-    stringstream ss;
-    size_t len = s->length;
-
-    if (return_truth) {
-      for (size_t i=0; i<len; i++) {
-        size_t l = (size_t)(((OAA::mc_label*)s->ec_start[i]->ld)->label);
-        if (i > 0) ss << ' ';
-        ss << l;
-      }
-    } else {
-      for (size_t i=0; i<actions.size(); i++) {
-        if (i > len) {
-          cerr << "warning (searn_sequencetask.to_string): list of actions is too long!  truncating from " << actions.size() << " to " << len << endl;
-          break;
-        }
-        if (i > 0) ss << ' ';
-        ss << actions[i];
-      }
-      if (actions.size() < len) {
-        cerr << "warning (searn_sequencetask.to_string): list of actions is too short!  appending from " << actions.size() << " to " << len << endl;
-        for (size_t i=actions.size(); i<len; i++) {
-          if (i > 0) ss << ' ';
-          ss << '0';
-        }
-      }
-    }
-
-    return ss.str();
-  }
-
-  // The following is just to test out LDF... we "fake" being an
-  // LDF-based task.
-
-  bool allowed(state s, action a)
-  {
-    return ((a >= 1) && (a <= seq_max_action));
-  }
-
-  void cs_ldf_example(vw& all, state s0, action a, example*&ec, bool create)
-  {
-    seq_state* s = (seq_state*)s0;
-    example* cur = s->ec_start[s->pos];
-    if (create) {
-      ec = alloc_example(sizeof(OAA::mc_label));
-      VW::copy_example_data(ec, cur, sizeof(OAA::mc_label), NULL);
-      OAA::default_label(ec->ld);
-      SearnUtil::add_history_to_example(all, &hinfo, ec, s->predictions);
-      update_example_indicies(all.audit, ec, increment * a);
-    } else {
-      dealloc_example(OAA::delete_label, *ec);
-      free(ec);
-      ec = NULL;
-    }
-  }
-}
-
-
-
-
-namespace SequenceTask_Easy {
-  using namespace ImperativeSearn;
-
-  SearnUtil::history_info hinfo;
-  v_array<size_t> yhat;
-
-  void initialize(vw& vw, uint32_t& num_actions) {
-    hinfo.length          = 1;
-    hinfo.bigrams         = false;
-    hinfo.features        = 0;
-    hinfo.bigram_features = false;
-  }
-
-  void finish(vw& vw) {
-    yhat.delete_v();
-  }
-
-  void get_oracle_labels(example*ec, v_array<uint32_t>*out) {
-    out->erase();
-    if (CSOAA::example_is_test(ec))
-      return;
-    CSOAA::label *lab = (CSOAA::label*)ec->ld;
-    float min_cost = lab->costs[0].x;
-    for (size_t l=1; l<lab->costs.size(); l++)
-      if (lab->costs[l].x < min_cost) min_cost = lab->costs[l].x;
+    if (vm.count("searn_bilou") || vm_file.count("searn_bilou")) {
+      cerr << "switching to BILOU encoding for sequence span labeling" << endl;
+      my_task_data->encoding = BILOU;
+      num_actions = num_actions * 2 - 1;
+    } else
+      my_task_data->encoding = BIO;
     
-    for (size_t l=0; l<lab->costs.size(); l++)
-      if (lab->costs[l].x <= min_cost)
-        out->push_back( lab->costs[l].weight_index );
+    
+    my_task_data->y_allowed.erase();
+
+    if (my_task_data->encoding == BIO) {
+      my_task_data->y_allowed.push_back(1);
+      for (uint32_t l=2; l<num_actions; l+=2)
+        my_task_data->y_allowed.push_back(l);
+      my_task_data->y_allowed.push_back(1);  // push back an extra 1 that we can overwrite later if we want
+    } else if (my_task_data->encoding == BILOU) {
+      my_task_data->y_allowed.push_back(1);
+      for (uint32_t l=2; l<num_actions; l+=4) {
+        my_task_data->y_allowed.push_back(l);
+        my_task_data->y_allowed.push_back(l+1);
+      }
+      my_task_data->only_two_allowed.push_back(0);
+      my_task_data->only_two_allowed.push_back(0);
+    }
+    
+    srn.task_data            = my_task_data;
+    srn.auto_history         = true;  // automatically add history features to our examples, please
+    srn.auto_hamming_loss    = true;  // please just use hamming loss on individual predictions -- we won'td eclare_loss
+    srn.examples_dont_change = true;  // we don't do any internal example munging
   }
 
-  void structured_predict_v1(vw& vw, searn& srn, example**ec, size_t len, stringstream*output_ss, stringstream*truth_ss) {
-    float total_loss  = 0;
-    size_t history_length = max(hinfo.features, hinfo.length);
-    bool is_train = false;
+  void finish(searn& srn) {
+    task_data * my_task_data = (task_data*)srn.task_data;
+    my_task_data->y_allowed.delete_v();
+    my_task_data->only_two_allowed.delete_v();
+    delete my_task_data;
+  }
 
-    yhat.erase();
-    yhat.resize(history_length + len, true); // pad the beginning with zeros for <s>
+  void structured_predict(searn& srn, example**ec, size_t len, stringstream*output_ss, stringstream*truth_ss) {
+    task_data * my_task_data = (task_data*)srn.task_data;
+    uint32_t last_prediction = 1;
+    v_array<uint32_t> * y_allowed = &(my_task_data->y_allowed);
 
-    v_array<uint32_t> ystar;
+    if (my_task_data->encoding == BILOU)  // TODO: move this out of here!
+      convert_bio_to_bilou(ec, len);
+    
     for (size_t i=0; i<len; i++) {
-      srn.snapshot(vw, i, 1, &i, sizeof(i));
-      srn.snapshot(vw, i, 2, yhat.begin+i, sizeof(size_t)*history_length);
-      srn.snapshot(vw, i, 3, &total_loss, sizeof(total_loss));
-      //cerr << "i=" << i << " --------------------------------------" << endl;
+      srn.snapshot(i, 1, &i, sizeof(i), true);
+      srn.snapshot(i, 2, &last_prediction, sizeof(last_prediction), true);
 
-      get_oracle_labels(ec[i], &ystar);
-
-      SearnUtil::add_history_to_example(vw, &hinfo, ec[i], yhat.begin+i);
-      yhat[i+history_length] = srn.predict(vw, &ec[i], 0, NULL, &ystar);
-      SearnUtil::remove_history_from_example(vw, &hinfo, ec[i]);
-
-      //cerr << "i=" << i << "\tpred=" << yhat.last() << endl;
-
-      if (!CSOAA::example_is_test(ec[i])) {
-        is_train = true;
-        if (yhat[i+history_length] != ystar.last())
-          total_loss += 1.0;
+      if (my_task_data->encoding == BIO) {
+        if      (last_prediction == 1)      (*y_allowed)[y_allowed->size()-1] = 1;
+        else if (last_prediction % 2 == 0)  (*y_allowed)[y_allowed->size()-1] = last_prediction+1;
+        else                                (*y_allowed)[y_allowed->size()-1] = last_prediction;
+      } else if (my_task_data->encoding == BILOU) {
+        if ((last_prediction == 1) || ((last_prediction-2) % 4 == 0) || ((last_prediction-2) % 4 == 3))
+          y_allowed = &(my_task_data->y_allowed);
+        else {
+          y_allowed = &(my_task_data->only_two_allowed);
+          my_task_data->only_two_allowed[0] = last_prediction+1;
+          my_task_data->only_two_allowed[1] = ((last_prediction-2) % 4 == 1) ? (last_prediction+2) : last_prediction;
+        }
       }
-    }
+      MULTICLASS::mc_label* y = (MULTICLASS::mc_label*)ec[i]->ld;
+      last_prediction = srn.predict(ec[i], y_allowed, y->label);
+
+      uint32_t printed_prediction = (my_task_data->encoding == BIO) ? last_prediction : bilou_to_bio(last_prediction);
+      uint32_t printed_truth      = (my_task_data->encoding == BIO) ? y->label        : bilou_to_bio(y->label);
       
-    if (output_ss != NULL) {
-      for (size_t i=0; i<len; i++) {
-        if (i > 0) (*output_ss) << ' ';
-        (*output_ss) << yhat[i+history_length];
+      if (output_ss) (*output_ss) << printed_prediction << ' ';
+      if (truth_ss ) (*truth_ss ) << (MULTICLASS::label_is_test(y) ? '?' : printed_truth) << ' ';
+    }
+
+    if (my_task_data->encoding == BILOU)  // TODO: move this out of here!
+      for (size_t n=0; n<len; n++) {
+        MULTICLASS::mc_label* ylab = (MULTICLASS::mc_label*)ec[n]->ld;
+        ylab->label = bilou_to_bio(ylab->label);
       }
-    }
-    if (truth_ss != NULL) {
-      for (size_t i=0; i<len; i++) {
-        get_oracle_labels(ec[i], &ystar);
-        if (i > 0) (*truth_ss) << ' ';
-        if (ystar.size() > 0) (*truth_ss) << ystar[0];
-        else (*truth_ss) << '?';
-      }
-    }
-    
-    ystar.erase();  ystar.delete_v();
-    srn.declare_loss(vw, len, is_train ? total_loss : -1.f);
   }
-
-  /*
-  void structured_predict_v2(vw& vw, example**ec, size_t len, string*output_str) {
-    float total_loss  = 0;
-
-    yhat.clear();
-    for (size_t n=0; n<hinfo.length; n++)
-      yhat.push_back(0);  // pad the beginning with zeros for <s>
-
-    for (int i=0; i<len; i++) {
-      vw.searn.snapshot(vw, i, 1, &i, sizeof(int));
-      vw.searn.snapshot(vw, i, 2, yhat.data()+i, sizeof(size_t)*hinfo.length);
-
-      size_t y = OAA::example_is_test(ec[i]) ? unknown_label : ((OAA::mc_label*)ec[i]->ld)->label;
-
-      SearnUtil::add_history_to_example(vw, &hinfo, ec[i], yhat.data()+i);
-      yhat.push_back( vw.searn.predict(vw, ec[i], y) );
-      SearnUtil::remove_history_from_example(vw, &hinfo, ec[i]);
-
-      if ((y != unknown_label) && (yhat.back != y))
-        total_loss += 1.0;
-    }
-      
-    vw.searn.declare_loss(vw, total_loss);
-  }
-  */
 }
 
+namespace SequenceTask_DemoLDF {  // this is just to debug/show off how to do LDF
+  using namespace Searn;
+
+  struct task_data {
+    example* ldf_examples;
+    size_t   num_actions;
+  };
+  
+  void initialize(searn& srn, size_t& num_actions, std::vector<std::string>&opts, po::variables_map& vm, po::variables_map& vm_file) {
+    COST_SENSITIVE::wclass default_wclass = { 0., 0, 0., 0. };
+
+    example* ldf_examples = alloc_examples(sizeof(COST_SENSITIVE::label), num_actions);
+    for (size_t a=0; a<num_actions; a++) {
+      COST_SENSITIVE::label* lab = (COST_SENSITIVE::label*)ldf_examples[a].ld;
+      lab->costs.push_back(default_wclass);
+    }
+
+    task_data* data = (task_data*)calloc_or_die(1, sizeof(task_data));
+    data->ldf_examples = ldf_examples;
+    data->num_actions  = num_actions;
+    
+    srn.task_data            = data;
+    srn.auto_history         = true;  // automatically add history features to our examples, please
+    srn.auto_hamming_loss    = true;  // please just use hamming loss on individual predictions -- we won't declare_loss
+    srn.examples_dont_change = false; // we do internal example munging -- we use the same memory space (data->ldf_examples) for everything
+    srn.is_ldf               = true;  // we generate ldf examples
+  }
+
+  void finish(searn& srn) {
+    task_data *data = (task_data*)srn.task_data;
+    for (size_t a=0; a<data->num_actions; a++)
+      dealloc_example(COST_SENSITIVE::delete_label, data->ldf_examples[a]);
+    free(data->ldf_examples);
+    free(data);
+  }
+
+  void structured_predict(searn& srn, example**ec, size_t len, stringstream*output_ss, stringstream*truth_ss) {
+    task_data *data = (task_data*)srn.task_data;
+    
+    for (size_t i=0; i<len; i++) { //save state for optimization
+      srn.snapshot(i, 1, &i, sizeof(i), true);
+
+      for (size_t a=0; a<data->num_actions; a++) {
+        VW::copy_example_data(false, &data->ldf_examples[a], ec[i]);  // copy but leave label alone!
+
+        // now, offset it appropriately for the action id
+        update_example_indicies(true, &data->ldf_examples[a], quadratic_constant, cubic_constant * (uint32_t)a);
+        
+        // need to tell searn what the action id is, so that it can add history features correctly!
+        COST_SENSITIVE::label* lab = (COST_SENSITIVE::label*)data->ldf_examples[a].ld;
+        lab->costs[0].x = 0.;
+        lab->costs[0].weight_index = (uint32_t)a+1;
+        lab->costs[0].partial_prediction = 0.;
+        lab->costs[0].wap_value = 0.;
+      }
+      
+      MULTICLASS::mc_label* y = (MULTICLASS::mc_label*)ec[i]->ld;
+      size_t pred_id = srn.predict(data->ldf_examples, data->num_actions, NULL, y->label - 1);
+      size_t prediction = pred_id + 1;  // or ldf_examples[pred_id]->ld.costs[0].weight_index
+      
+      if (output_ss) (*output_ss) << prediction << ' ';
+      if (truth_ss ) (*truth_ss ) << (MULTICLASS::label_is_test(y) ? '?' : y->label) << ' ';
+    }
+  }
+
+  // this is totally bogus for the example -- you'd never actually do this!
+  void update_example_indicies(bool audit, example* ec, uint32_t mult_amount, uint32_t plus_amount) {
+    for (unsigned char* i = ec->indices.begin; i != ec->indices.end; i++)
+      for (feature* f = ec->atomics[*i].begin; f != ec->atomics[*i].end; ++f)
+        f->weight_index = (f->weight_index * mult_amount) + plus_amount;
+    if (audit)
+      for (unsigned char* i = ec->indices.begin; i != ec->indices.end; i++) 
+        if (ec->audit_features[*i].begin != ec->audit_features[*i].end)
+          for (audit_data *f = ec->audit_features[*i].begin; f != ec->audit_features[*i].end; ++f)
+            f->weight_index = (f->weight_index * mult_amount) + plus_amount;
+  }
+}
