@@ -1,3 +1,9 @@
+vowpal-wabbit (7.6-1) unstable; urgency=medium
+
+  * Fresh upstream release
+
+ -- Yaroslav Halchenko <debian@onerussian.com>  Sun, 04 May 2014 18:11:52 -0400
+
 vowpal-wabbit (7.3-1) unstable; urgency=low
 
   * New upstream release
