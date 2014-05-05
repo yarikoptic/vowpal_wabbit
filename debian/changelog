@@ -4,6 +4,14 @@ vowpal-wabbit (7.6-1) unstable; urgency=medium
 
  -- Yaroslav Halchenko <debian@onerussian.com>  Sun, 04 May 2014 18:11:52 -0400
 
+vowpal-wabbit (7.3-1.1) unstable; urgency=medium
+
+  * Non-maintainer upload.
+  * debian/patches/boost_autoconf.patch: Update Boost autoconf macros to deal
+    handle multi-archified Boost. (Closes: #741756)
+
+ -- Sebastian Ramacher <sramacher@debian.org>  Fri, 25 Apr 2014 23:44:39 +0200
+
 vowpal-wabbit (7.3-1) unstable; urgency=low
 
   * New upstream release

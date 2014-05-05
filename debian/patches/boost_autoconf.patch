@@ -1,0 +1,70 @@
+Description: Update autoconf macros for boost to work with multiarch
+Author: Sebastian Ramacher <sramacher@debian.org>
+Bug-Debian: http://bugs.debian.org/741756
+Last-Update: 2014-04-25
+
+--- vowpal-wabbit-7.3.orig/acinclude.d/ax_boost_base.m4
++++ vowpal-wabbit-7.3/acinclude.d/ax_boost_base.m4
+@@ -33,7 +33,7 @@
+ #   and this notice are preserved. This file is offered as-is, without any
+ #   warranty.
+ 
+-#serial 20
++#serial 23
+ 
+ AC_DEFUN([AX_BOOST_BASE],
+ [
+@@ -91,9 +91,23 @@ if test "x$want_boost" = "xyes"; then
+     dnl are found, e.g. when only header-only libraries are installed!
+     libsubdirs="lib"
+     ax_arch=`uname -m`
+-    if test $ax_arch = x86_64 -o $ax_arch = ppc64 -o $ax_arch = s390x -o $ax_arch = sparc64; then
++    case $ax_arch in
++      x86_64|ppc64|s390x|sparc64|aarch64)
+         libsubdirs="lib64 lib lib64"
+-    fi
++        ;;
++    esac
++
++    dnl allow for real multi-arch paths e.g. /usr/lib/x86_64-linux-gnu. Give
++    dnl them priority over the other paths since, if libs are found there, they
++    dnl are almost assuredly the ones desired.
++    AC_REQUIRE([AC_CANONICAL_HOST])
++    libsubdirs="lib/${host_cpu}-${host_os} $libsubdirs"
++
++    case ${host_cpu} in
++      i?86)
++        libsubdirs="lib/i386-${host_os} $libsubdirs"
++        ;;
++    esac
+ 
+     dnl first we check the system location for boost libraries
+     dnl this location ist chosen if boost libraries are installed with the --layout=system option
+--- vowpal-wabbit-7.3.orig/acinclude.d/ax_boost_program_options.m4
++++ vowpal-wabbit-7.3/acinclude.d/ax_boost_program_options.m4
+@@ -29,7 +29,7 @@
+ #   and this notice are preserved. This file is offered as-is, without any
+ #   warranty.
+ 
+-#serial 20
++#serial 22
+ 
+ AC_DEFUN([AX_BOOST_PROGRAM_OPTIONS],
+ [
+@@ -74,14 +74,14 @@ AC_DEFUN([AX_BOOST_PROGRAM_OPTIONS],
+ 				AC_DEFINE(HAVE_BOOST_PROGRAM_OPTIONS,,[define if the Boost::PROGRAM_OPTIONS library is available])
+                   BOOSTLIBDIR=`echo $BOOST_LDFLAGS | sed -e 's/@<:@^\/@:>@*//'`
+                 if test "x$ax_boost_user_program_options_lib" = "x"; then
+-                for libextension in `ls $BOOSTLIBDIR/libboost_program_options*.so* 2>/dev/null | sed 's,.*/,,' | sed -e 's;^lib\(boost_program_options.*\)\.so.*$;\1;'` `ls $BOOSTLIBDIR/libboost_program_options*.a* 2>/dev/null | sed 's,.*/,,' | sed -e 's;^lib\(boost_program_options.*\)\.a*$;\1;'` ; do
++                for libextension in `ls $BOOSTLIBDIR/libboost_program_options*.so* 2>/dev/null | sed 's,.*/,,' | sed -e 's;^lib\(boost_program_options.*\)\.so.*$;\1;'` `ls $BOOSTLIBDIR/libboost_program_options*.dylib* 2>/dev/null | sed 's,.*/,,' | sed -e 's;^lib\(boost_program_options.*\)\.dylib.*$;\1;'` `ls $BOOSTLIBDIR/libboost_program_options*.a* 2>/dev/null | sed 's,.*/,,' | sed -e 's;^lib\(boost_program_options.*\)\.a.*$;\1;'` ; do
+                      ax_lib=${libextension}
+ 				    AC_CHECK_LIB($ax_lib, exit,
+                                  [BOOST_PROGRAM_OPTIONS_LIB="-l$ax_lib"; AC_SUBST(BOOST_PROGRAM_OPTIONS_LIB) link_program_options="yes"; break],
+                                  [link_program_options="no"])
+ 				done
+                 if test "x$link_program_options" != "xyes"; then
+-                for libextension in `ls $BOOSTLIBDIR/boost_program_options*.dll* 2>/dev/null | sed 's,.*/,,' | sed -e 's;^\(boost_program_options.*\)\.dll.*$;\1;'` `ls $BOOSTLIBDIR/boost_program_options*.a* 2>/dev/null | sed 's,.*/,,' | sed -e 's;^\(boost_program_options.*\)\.a*$;\1;'` ; do
++                for libextension in `ls $BOOSTLIBDIR/boost_program_options*.dll* 2>/dev/null | sed 's,.*/,,' | sed -e 's;^\(boost_program_options.*\)\.dll.*$;\1;'` `ls $BOOSTLIBDIR/boost_program_options*.a* 2>/dev/null | sed 's,.*/,,' | sed -e 's;^\(boost_program_options.*\)\.a.*$;\1;'` ; do
+                      ax_lib=${libextension}
+ 				    AC_CHECK_LIB($ax_lib, exit,
+                                  [BOOST_PROGRAM_OPTIONS_LIB="-l$ax_lib"; AC_SUBST(BOOST_PROGRAM_OPTIONS_LIB) link_program_options="yes"; break],
