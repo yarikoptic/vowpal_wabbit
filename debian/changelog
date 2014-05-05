@@ -1,6 +1,8 @@
 vowpal-wabbit (7.6-1) unstable; urgency=medium
 
   * Fresh upstream release
+  * debian/watch
+    - removed 'v' prefix from tags -- upstream stopped using it
 
  -- Yaroslav Halchenko <debian@onerussian.com>  Sun, 04 May 2014 18:11:52 -0400
 
