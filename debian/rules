@@ -41,6 +41,8 @@ override_dh_auto_clean:
 	-rm -f test/*.predict test/*.tmp depend $(MANPAGES)
 	: # And more garbage left with autoreconf
 	-rm -f vowpalwabbit/config.h vowpalwabbit/depend
+	: # Remove generated makefiles
+	-rm -f Makefile library/Makefile cluster/Makefile vowpalwabbit/Makefile
 
 override_dh_strip:
 	dh_strip --dbg-package=vowpal-wabbit-dbg
