@@ -26,6 +26,10 @@ override_dh_auto_install:
 
 override_dh_installexamples:
 	dh_installexamples
+	: # Don't ship unreproducible test timings
+	find debian/ -name RunTests.last.times -type f -delete
+	: # Don't ship unreproducible model file
+	find debian/ -name 0001.model -type f -delete
 	: # Change permissions on windows-generated files
 	find debian/ -name '*-mswin' -type f | xargs -r chmod a-x
 
