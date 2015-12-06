@@ -5,8 +5,10 @@ Maintainer: Yaroslav Halchenko <debian@onerussian.com>
 Build-Depends: debhelper (>= 7.0.50~),
                dh-autoreconf,
                libboost-program-options-dev,
+			   libboost-python-dev,
                help2man,
-               zlib1g-dev
+               zlib1g-dev,
+			   markdown, html2text,
 Standards-Version: 3.9.3
 Homepage: http://hunch.net/~vw/
 Vcs-Browser: http://github.com/yarikoptic/vowpal_wabbit
