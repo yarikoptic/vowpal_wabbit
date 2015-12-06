@@ -1,27 +1,25 @@
 Num weight bits = 13
 learning rate = 1
-initial_t = 1
+initial_t = 0
 power_t = 0.5
 using no cache
-Reading datafile = train-sets/wiki1K.dat
+Reading datafile = train-sets/wiki256.dat
 num sources = 1
-average    since         example     example  current  current  current
-loss       last          counter      weight    label  predict features
-10.149301  10.149301           1         1.0  unknown   0.0000      732
-10.369812  10.590324           2         2.0  unknown   0.0000       27
-10.325923  10.282033           4         4.0  unknown   0.0000       53
-10.401762  10.477602           8         8.0  unknown   0.0000       60
-10.356291  10.310820          16        16.0  unknown   0.0000       26
-10.472940  10.589588          32        32.0  unknown   0.0000      125
-10.474844  10.476749          64        64.0  unknown   0.0000      313
-10.425304  10.375763         128       128.0  unknown   0.0000       50
-9.797446   9.169588          256       256.0  unknown   0.0000       33
-9.251716   8.705987          512       512.0  unknown   0.0000       26
+average  since         example        example  current  current  current
+loss     last          counter         weight    label  predict features
+10.149310 10.149310            1            1.0  unknown   0.0000      732
+10.369817 10.590324            2            2.0  unknown   0.0000       27
+10.325926 10.282035            4            4.0  unknown   0.0000       53
+10.401768 10.477609            8            8.0  unknown   0.0000       60
+10.356288 10.310808           16           16.0  unknown   0.0000       26
+10.472953 10.589619           32           32.0  unknown   0.0000      125
+10.474859 10.476765           64           64.0  unknown   0.0000      313
+10.425314 10.375768          128          128.0  unknown   0.0000       50
+10.005560 9.585807          256          256.0  unknown   0.0000       33
 
 finished run
-number of examples = 1000
-weighted example sum = 1000
-weighted label sum = 0
-average loss = 8.84619
-best constant = 1
-total feature number = 86919
+number of examples = 256
+weighted example sum = 256.000000
+weighted label sum = 0.000000
+average loss = 10.005560
+total feature number = 22158

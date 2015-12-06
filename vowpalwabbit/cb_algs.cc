@@ -5,11 +5,10 @@ license as described in the file LICENSE.
  */
 #include <float.h>
 
+#include "vw.h"
 #include "reductions.h"
-#include "cost_sensitive.h"
-#include "cb.h"
 #include "cb_algs.h"
-#include "simple_label.h"
+#include "vw_exception.h"
 
 using namespace LEARNER;
 
@@ -19,552 +18,406 @@ using namespace LEARNER;
 
 using namespace CB;
 
-namespace CB_ALGS
-{
-  struct cb {
-    size_t cb_type;
-    COST_SENSITIVE::label cb_cs_ld; 
-    float avg_loss_regressors;
-    size_t nb_ex_regressors;
-    float last_pred_reg;
-    float last_correct_cost;
-    
-    float min_cost;
-    float max_cost;
+struct cb
+{ size_t cb_type;
+  uint32_t num_actions;
+  COST_SENSITIVE::label cb_cs_ld;
+  COST_SENSITIVE::label pred_scores;
+  LEARNER::base_learner* scorer;
+  float avg_loss_regressors;
+  size_t nb_ex_regressors;
+  float last_pred_reg;
+  float last_correct_cost;
 
-    cb_class* known_cost;
-    vw* all;
-  };
-  
-  bool know_all_cost_example(CB::label* ld)
-  {
-    if (ld->costs.size() <= 1) //this means we specified an example where all actions are possible but only specified the cost for the observed action
+  cb_class* known_cost;
+};
+
+bool know_all_cost_example(CB::label& ld)
+{ if (ld.costs.size() <= 1) //this means we specified an example where all actions are possible but only specified the cost for the observed action
+    return false;
+
+  //if we specified more than 1 action for this example, i.e. either we have a limited set of possible actions, or all actions are specified
+  //than check if all actions have a specified cost
+  for (cb_class* cl = ld.costs.begin; cl != ld.costs.end; cl++)
+    if (cl->cost == FLT_MAX)
       return false;
 
-    //if we specified more than 1 action for this example, i.e. either we have a limited set of possible actions, or all actions are specified
-    //than check if all actions have a specified cost
-    for (cb_class* cl = ld->costs.begin; cl != ld->costs.end; cl++)
-      if (cl->cost == FLT_MAX)
-        return false;
+  return true;
+}
 
+bool is_test_label(CB::label& ld)
+{ if (ld.costs.size() == 0)
     return true;
-  }
+  for (size_t i=0; i<ld.costs.size(); i++)
+    if (FLT_MAX != ld.costs[i].cost && ld.costs[i].probability > 0.)
+      return false;
+  return true;
+}
 
-  bool is_test_label(CB::label* ld)
-  {
-    if (ld->costs.size() == 0)
-      return true;
-    for (size_t i=0; i<ld->costs.size(); i++)
-      if (FLT_MAX != ld->costs[i].cost && ld->costs[i].probability > 0.)
-        return false;
-    return true;
-  }
-  
-  inline bool observed_cost(cb_class* cl)
-  {
-    //cost observed for this action if it has non zero probability and cost != FLT_MAX
-    return (cl != NULL && cl->cost != FLT_MAX && cl->probability > .0);
-  }
-  
-  cb_class* get_observed_cost(CB::label* ld)
-  {
-    size_t i = 0;
-    for (cb_class *cl = ld->costs.begin; cl != ld->costs.end; cl ++, i++)
-    {
-      if( observed_cost(cl) ) {
-        return cl;
+inline bool observed_cost(cb_class* cl)
+{ //cost observed for this action if it has non zero probability and cost != FLT_MAX
+  return (cl != nullptr && cl->cost != FLT_MAX && cl->probability > .0);
+}
+
+cb_class* get_observed_cost(CB::label& ld)
+{ for (cb_class *cl = ld.costs.begin; cl != ld.costs.end; cl++)
+    if( observed_cost(cl) )
+      return cl;
+  return nullptr;
+}
+
+void gen_cs_example_ips(cb& c, CB::label& ld, COST_SENSITIVE::label& cs_ld)
+{ //this implements the inverse propensity score method, where cost are importance weighted by the probability of the chosen action
+  //generate cost-sensitive example
+  cs_ld.costs.erase();
+  if( ld.costs.size() == 1)   //this is a typical example where we can perform all actions
+  { //in this case generate cost-sensitive example with all actions
+    for(uint32_t i = 1; i <= c.num_actions; i++)
+    { COST_SENSITIVE::wclass wc;
+      wc.wap_value = 0.;
+      wc.x = 0.;
+      wc.class_index = i;
+      wc.partial_prediction = 0.;
+      wc.wap_value = 0.;
+      if( c.known_cost != nullptr && i == c.known_cost->action )
+      { wc.x = c.known_cost->cost / c.known_cost->probability; //use importance weighted cost for observed action, 0 otherwise
+        //ips can be thought as the doubly robust method with a fixed regressor that predicts 0 costs for everything
+        //update the loss of this regressor
+        c.nb_ex_regressors++;
+        c.avg_loss_regressors += (1.0f/c.nb_ex_regressors)*( (c.known_cost->cost)*(c.known_cost->cost) - c.avg_loss_regressors );
+        c.last_pred_reg = 0;
+        c.last_correct_cost = c.known_cost->cost;
       }
+
+      cs_ld.costs.push_back(wc );
     }
-    return NULL;
+  }
+  else   //this is an example where we can only perform a subset of the actions
+  { //in this case generate cost-sensitive example with only allowed actions
+    for( cb_class* cl = ld.costs.begin; cl != ld.costs.end; cl++ )
+    { COST_SENSITIVE::wclass wc;
+      wc.wap_value = 0.;
+      wc.x = 0.;
+      wc.class_index = cl->action;
+      wc.partial_prediction = 0.;
+      wc.wap_value = 0.;
+      if( c.known_cost != nullptr && cl->action == c.known_cost->action )
+      { wc.x = c.known_cost->cost / c.known_cost->probability; //use importance weighted cost for observed action, 0 otherwise
+
+        //ips can be thought as the doubly robust method with a fixed regressor that predicts 0 costs for everything
+        //update the loss of this regressor
+        c.nb_ex_regressors++;
+        c.avg_loss_regressors += (1.0f/c.nb_ex_regressors)*( (c.known_cost->cost)*(c.known_cost->cost) - c.avg_loss_regressors );
+        c.last_pred_reg = 0;
+        c.last_correct_cost = c.known_cost->cost;
+      }
+
+      cs_ld.costs.push_back( wc );
+    }
   }
 
-  void gen_cs_example_ips(vw& all, cb& c, example& ec, COST_SENSITIVE::label& cs_ld)
-  {//this implements the inverse propensity score method, where cost are importance weighted by the probability of the chosen action
-    CB::label* ld = (CB::label*)ec.ld;
-   
-    //generate cost-sensitive example
-    cs_ld.costs.erase();
-    if( ld->costs.size() == 1) { //this is a typical example where we can perform all actions
-      //in this case generate cost-sensitive example with all actions
-      for(uint32_t i = 1; i <= all.sd->k; i++)
-      {
-        COST_SENSITIVE::wclass wc;
-        wc.wap_value = 0.;
-        wc.x = 0.;
-        wc.weight_index = i;
-        wc.partial_prediction = 0.;
-        wc.wap_value = 0.;
-        if( c.known_cost != NULL && i == c.known_cost->action )
-        {
-          wc.x = c.known_cost->cost / c.known_cost->probability; //use importance weighted cost for observed action, 0 otherwise 
-          //ips can be thought as the doubly robust method with a fixed regressor that predicts 0 costs for everything
-          //update the loss of this regressor 
-          c.nb_ex_regressors++;
-          c.avg_loss_regressors += (1.0f/c.nb_ex_regressors)*( (c.known_cost->cost)*(c.known_cost->cost) - c.avg_loss_regressors );
-          c.last_pred_reg = 0;
-          c.last_correct_cost = c.known_cost->cost;
-        }
+}
 
-        cs_ld.costs.push_back(wc );
+template <bool is_learn>
+void gen_cs_example_dm(cb& c, example& ec, COST_SENSITIVE::label& cs_ld)
+{ //this implements the direct estimation method, where costs are directly specified by the learned regressor.
+  CB::label ld = ec.l.cb;
+
+  float min = FLT_MAX;
+  uint32_t argmin = 1;
+  //generate cost sensitive example
+  cs_ld.costs.erase();
+  c.pred_scores.costs.erase();
+
+  if( ld.costs.size() == 1)   //this is a typical example where we can perform all actions
+  { //in this case generate cost-sensitive example with all actions
+    for(uint32_t i = 1; i <= c.num_actions; i++)
+    { COST_SENSITIVE::wclass wc;
+      wc.wap_value = 0.;
+
+      //get cost prediction for this action
+      wc.x = CB_ALGS::get_cost_pred<is_learn>(c.scorer, c.known_cost, ec, i, 0);
+      if (wc.x < min)
+      { min = wc.x;
+        argmin = i;
       }
-    }
-    else { //this is an example where we can only perform a subset of the actions
-      //in this case generate cost-sensitive example with only allowed actions
-      for( cb_class* cl = ld->costs.begin; cl != ld->costs.end; cl++ )
-      {
-        COST_SENSITIVE::wclass wc;
-        wc.wap_value = 0.;
-        wc.x = 0.;
-        wc.weight_index = cl->action;
-        wc.partial_prediction = 0.;
-        wc.wap_value = 0.;
-        if( c.known_cost != NULL && cl->action == c.known_cost->action )
-        {
-          wc.x = c.known_cost->cost / c.known_cost->probability; //use importance weighted cost for observed action, 0 otherwise 
 
-          //ips can be thought as the doubly robust method with a fixed regressor that predicts 0 costs for everything
-          //update the loss of this regressor 
-          c.nb_ex_regressors++;
-          c.avg_loss_regressors += (1.0f/c.nb_ex_regressors)*( (c.known_cost->cost)*(c.known_cost->cost) - c.avg_loss_regressors );
-          c.last_pred_reg = 0;
-          c.last_correct_cost = c.known_cost->cost;
-        }
+      wc.class_index = i;
+      wc.partial_prediction = 0.;
+      wc.wap_value = 0.;
 
-        cs_ld.costs.push_back( wc );
+      c.pred_scores.costs.push_back(wc);
+
+      if( c.known_cost != nullptr && c.known_cost->action == i )
+      { c.nb_ex_regressors++;
+        c.avg_loss_regressors += (1.0f/c.nb_ex_regressors)*( (c.known_cost->cost - wc.x)*(c.known_cost->cost - wc.x) - c.avg_loss_regressors );
+        c.last_pred_reg = wc.x;
+        c.last_correct_cost = c.known_cost->cost;
       }
-    }
 
+      cs_ld.costs.push_back( wc );
+    }
+  }
+  else   //this is an example where we can only perform a subset of the actions
+  { //in this case generate cost-sensitive example with only allowed actions
+    for( cb_class* cl = ld.costs.begin; cl != ld.costs.end; cl++ )
+    { COST_SENSITIVE::wclass wc;
+      wc.wap_value = 0.;
+
+      //get cost prediction for this action
+      wc.x = CB_ALGS::get_cost_pred<is_learn>(c.scorer, c.known_cost, ec, cl->action, 0);
+      if (wc.x < min || (wc.x == min && cl->action < argmin))
+      { min = wc.x;
+        argmin = cl->action;
+      }
+
+      wc.class_index = cl->action;
+      wc.partial_prediction = 0.;
+      wc.wap_value = 0.;
+
+      c.pred_scores.costs.push_back(wc);
+
+      if( c.known_cost != nullptr && c.known_cost->action == cl->action )
+      { c.nb_ex_regressors++;
+        c.avg_loss_regressors += (1.0f/c.nb_ex_regressors)*( (c.known_cost->cost - wc.x)*(c.known_cost->cost - wc.x) - c.avg_loss_regressors );
+        c.last_pred_reg = wc.x;
+        c.last_correct_cost = c.known_cost->cost;
+      }
+
+      cs_ld.costs.push_back( wc );
+    }
   }
 
-  template <bool is_learn>
-  void gen_cs_example_dm(vw& all, cb& c, example& ec, COST_SENSITIVE::label& cs_ld)
-  {
-    //this implements the direct estimation method, where costs are directly specified by the learned regressor.
-    CB::label* ld = (CB::label*)ec.ld;
+  ec.pred.multiclass = argmin;
+}
 
-    float min = FLT_MAX;
-    size_t argmin = 1;
-    //generate cost sensitive example
-    cs_ld.costs.erase();  
-    if( ld->costs.size() == 1) { //this is a typical example where we can perform all actions
-      //in this case generate cost-sensitive example with all actions  
-      for(uint32_t i = 1; i <= all.sd->k; i++)
-      {
-        COST_SENSITIVE::wclass wc;
-        wc.wap_value = 0.;
-      
-        //get cost prediction for this action
-        wc.x = get_cost_pred<is_learn>(all, c.known_cost, ec, i, 0);
-	if (wc.x < min)
-	  {
-	    min = wc.x;
-	    argmin = i;
-	  }
+template <bool is_learn>
+void gen_cs_label(cb& c, example& ec, COST_SENSITIVE::label& cs_ld, uint32_t label)
+{ COST_SENSITIVE::wclass wc;
+  wc.wap_value = 0.;
 
-        wc.weight_index = i;
-        wc.partial_prediction = 0.;
-        wc.wap_value = 0.;
+  //get cost prediction for this label
+  wc.x = CB_ALGS::get_cost_pred<is_learn>(c.scorer, c.known_cost, ec, label, c.num_actions);
+  wc.class_index = label;
+  wc.partial_prediction = 0.;
+  wc.wap_value = 0.;
 
-        if( c.known_cost != NULL && c.known_cost->action == i ) {
-          c.nb_ex_regressors++;
-          c.avg_loss_regressors += (1.0f/c.nb_ex_regressors)*( (c.known_cost->cost - wc.x)*(c.known_cost->cost - wc.x) - c.avg_loss_regressors );
-          c.last_pred_reg = wc.x;
-          c.last_correct_cost = c.known_cost->cost;
-        }
+  c.pred_scores.costs.push_back(wc);
 
-        cs_ld.costs.push_back( wc );
-      }
+  //add correction if we observed cost for this action and regressor is wrong
+  if( c.known_cost != nullptr && c.known_cost->action == label )
+  { c.nb_ex_regressors++;
+    c.avg_loss_regressors += (1.0f/c.nb_ex_regressors)*( (c.known_cost->cost - wc.x)*(c.known_cost->cost - wc.x) - c.avg_loss_regressors );
+    c.last_pred_reg = wc.x;
+    c.last_correct_cost = c.known_cost->cost;
+    wc.x += (c.known_cost->cost - wc.x) / c.known_cost->probability;
+  }
+  //cout<<"Prediction = "<<wc.x<<" ";
+  cs_ld.costs.push_back( wc );
+
+}
+
+template <bool is_learn>
+void gen_cs_example_dr(cb& c, example& ec, CB::label& ld, COST_SENSITIVE::label& cs_ld)
+{ //this implements the doubly robust method
+  cs_ld.costs.erase();
+  c.pred_scores.costs.erase();
+  if(ld.costs.size() == 0)//a test example
+    for(uint32_t i = 1; i <= c.num_actions; i++)
+    { //Explicit declaration for a weak compiler.
+      COST_SENSITIVE::wclass c = {FLT_MAX, i, 0., 0.};
+      cs_ld.costs.push_back(c);
     }
-    else { //this is an example where we can only perform a subset of the actions
-      //in this case generate cost-sensitive example with only allowed actions
-      for( cb_class* cl = ld->costs.begin; cl != ld->costs.end; cl++ )
-      {
-        COST_SENSITIVE::wclass wc;
-        wc.wap_value = 0.;
-      
-        //get cost prediction for this action
-        wc.x = get_cost_pred<is_learn>(all, c.known_cost, ec, cl->action, 0);
-	if (wc.x < min || (wc.x == min && cl->action < argmin))
-	  {
-	    min = wc.x;
-	    argmin = cl->action;
-	  }
+  else if( ld.costs.size() == 1) //this is a typical example where we can perform all actions
+    //in this case generate cost-sensitive example with all actions
+    for(uint32_t i = 1; i <= c.num_actions; i++)
+      gen_cs_label<is_learn>(c, ec, cs_ld, i);
+  else  //this is an example where we can only perform a subset of the actions
+    //in this case generate cost-sensitive example with only allowed actions
+    for( cb_class* cl = ld.costs.begin; cl != ld.costs.end; cl++ )
+      gen_cs_label<is_learn>(c, ec, cs_ld, cl->action);
+  //cout<<endl;
+}
 
-        wc.weight_index = cl->action;
-        wc.partial_prediction = 0.;
-        wc.wap_value = 0.;
+template <bool is_learn>
+void predict_or_learn(cb& c, base_learner& base, example& ec)
+{ CB::label ld = ec.l.cb;
 
-        if( c.known_cost != NULL && c.known_cost->action == cl->action ) {
-          c.nb_ex_regressors++;
-          c.avg_loss_regressors += (1.0f/c.nb_ex_regressors)*( (c.known_cost->cost - wc.x)*(c.known_cost->cost - wc.x) - c.avg_loss_regressors );
-          c.last_pred_reg = wc.x;
-          c.last_correct_cost = c.known_cost->cost;
-        }
-
-        cs_ld.costs.push_back( wc );
-      }
-    }
-    
-    ec.final_prediction = (float)argmin;
+  c.known_cost = get_observed_cost(ld);
+  if (c.known_cost != nullptr && (c.known_cost->action < 1 || c.known_cost->action > c.num_actions))
+    cerr << "invalid action: " << c.known_cost->action << endl;
+  //generate a cost-sensitive example to update classifiers
+  switch(c.cb_type)
+  { case CB_TYPE_IPS:
+      gen_cs_example_ips(c,ld,c.cb_cs_ld);
+      break;
+    case CB_TYPE_DM:
+      gen_cs_example_dm<is_learn>(c,ec,c.cb_cs_ld);
+      break;
+    case CB_TYPE_DR:
+      gen_cs_example_dr<is_learn>(c,ec,ld,c.cb_cs_ld);
+      break;
+    default:
+      THROW("Unknown cb_type specified for contextual bandit learning: " << c.cb_type);
   }
 
-  template <bool is_learn>
-  void gen_cs_label(vw& all, cb& c, example& ec, COST_SENSITIVE::label& cs_ld, uint32_t label)
-  {
-    COST_SENSITIVE::wclass wc;
-    wc.wap_value = 0.;
-    
-    //get cost prediction for this label
-    wc.x = get_cost_pred<is_learn>(all, c.known_cost, ec, label, all.sd->k);
-    wc.weight_index = label;
-    wc.partial_prediction = 0.;
-    wc.wap_value = 0.;
-    
-    //add correction if we observed cost for this action and regressor is wrong
-    if( c.known_cost != NULL && c.known_cost->action == label ) {
-      c.nb_ex_regressors++;
-      c.avg_loss_regressors += (1.0f/c.nb_ex_regressors)*( (c.known_cost->cost - wc.x)*(c.known_cost->cost - wc.x) - c.avg_loss_regressors );
-      c.last_pred_reg = wc.x;
-      c.last_correct_cost = c.known_cost->cost;
-      wc.x += (c.known_cost->cost - wc.x) / c.known_cost->probability;
-    }
-    cs_ld.costs.push_back( wc );
-  }
+  if (c.cb_type != CB_TYPE_DM)
+  { ec.l.cs = c.cb_cs_ld;
 
-  template <bool is_learn>
-  void gen_cs_example_dr(vw& all, cb& c, example& ec, COST_SENSITIVE::label& cs_ld)
-  {//this implements the doubly robust method
-    CB::label* ld = (CB::label*)ec.ld;
-    
-    //generate cost sensitive example
-    cs_ld.costs.erase();
-    if( ld->costs.size() == 1) //this is a typical example where we can perform all actions
-      //in this case generate cost-sensitive example with all actions
-      for(uint32_t i = 1; i <= all.sd->k; i++)
-	gen_cs_label<is_learn>(all, c, ec, cs_ld, i);
-    else  //this is an example where we can only perform a subset of the actions
-      //in this case generate cost-sensitive example with only allowed actions
-      for( cb_class* cl = ld->costs.begin; cl != ld->costs.end; cl++ )
-	gen_cs_label<is_learn>(all, c, ec, cs_ld, cl->action);
-  }
-
-  void cb_test_to_cs_test_label(vw& all, example& ec, COST_SENSITIVE::label& cs_ld)
-  {
-    CB::label* ld = (CB::label*)ec.ld;
-
-    cs_ld.costs.erase();
-    if(ld->costs.size() > 0)
-    {
-      //if this is a test example and we specified actions, this means we are only allowed to perform these actions, so copy all actions with their specified costs
-      for( cb_class* cl = ld->costs.begin; cl != ld->costs.end; cl++)
-      {
-        COST_SENSITIVE::wclass wc;
-        wc.wap_value = 0.;
-
-        wc.x = cl->cost;
-        wc.weight_index = cl->action;
-        wc.partial_prediction = 0.;
-        wc.wap_value = 0.;
-        
-        cs_ld.costs.push_back(wc);
-      }
-    }
+    if (is_learn)
+      base.learn(ec);
     else
-      {
-	for (uint32_t i = 0; i < all.sd->k; i++)
-	  {
-	    COST_SENSITIVE::wclass wc;
-	    wc.wap_value = 0.;
-	    
-	    wc.x = FLT_MAX;
-	    wc.weight_index = i+1;
-	    wc.partial_prediction = 0.;
-	    wc.wap_value = 0.;
-	    
-	    cs_ld.costs.push_back(wc);
-	  }
-      }
-  }
-
-  template <bool is_learn>
-  void predict_or_learn(cb& c, learner& base, example& ec) {
-    vw* all = c.all;
-    CB::label* ld = (CB::label*)ec.ld;
-
-    //check if this is a test example where we just want a prediction
-    if( is_test_label(ld) )
-    {
-      //if so just query base cost-sensitive learner
-      cb_test_to_cs_test_label(*all,ec,c.cb_cs_ld);
-
-      ec.ld = &c.cb_cs_ld;
       base.predict(ec);
-      ec.ld = ld;
-      for (size_t i=0; i<ld->costs.size(); i++)
-        ld->costs[i].partial_prediction = c.cb_cs_ld.costs[i].partial_prediction;
-      return;
+
+    for (size_t i=0; i<ld.costs.size(); i++)
+      ld.costs[i].partial_prediction = c.cb_cs_ld.costs[i].partial_prediction;
+    ec.l.cb = ld;
+  }
+}
+
+void predict_eval(cb&, base_learner&, example&)
+{ THROW("can not use a test label for evaluation");
+}
+
+void learn_eval(cb& c, base_learner&, example& ec)
+{ CB_EVAL::label ld = ec.l.cb_eval;
+
+  c.known_cost = get_observed_cost(ld.event);
+
+  if (c.cb_type == CB_TYPE_DR)
+    gen_cs_example_dr<true>(c, ec, ld.event, c.cb_cs_ld);
+  else //c.cb_type == CB_TYPE_IPS
+    gen_cs_example_ips(c, ld.event, c.cb_cs_ld);
+
+  for (size_t i=0; i<ld.event.costs.size(); i++)
+    ld.event.costs[i].partial_prediction = c.cb_cs_ld.costs[i].partial_prediction;
+
+  ec.pred.multiclass = ec.l.cb_eval.action;
+}
+
+float get_unbiased_cost(CB::cb_class* known_cost, COST_SENSITIVE::label& scores, uint32_t action)
+{ float loss = 0.;
+
+  for (COST_SENSITIVE::wclass *cl = scores.costs.begin; cl != scores.costs.end; cl++)
+    if (cl->class_index == action)
+      loss = cl->x;
+
+  if (known_cost->action == action)
+    loss += (known_cost->cost - loss) / known_cost->probability;
+
+  return loss;
+}
+
+void output_example(vw& all, cb& c, example& ec, CB::label& ld)
+{ float loss = 0.;
+  if(!is_test_label(ld))
+    loss = get_unbiased_cost(c.known_cost, c.pred_scores, ec.pred.multiclass);
+
+  all.sd->update(ec.test_only, loss, 1.f, ec.num_features);
+
+  for (int* sink = all.final_prediction_sink.begin; sink != all.final_prediction_sink.end; sink++)
+    all.print(*sink, (float)ec.pred.multiclass, 0, ec.tag);
+
+  if (all.raw_prediction > 0)
+  { stringstream outputStringStream;
+    for (unsigned int i = 0; i < ld.costs.size(); i++)
+    { cb_class cl = ld.costs[i];
+      if (i > 0) outputStringStream << ' ';
+      outputStringStream <<  cl.action <<':' << cl.partial_prediction;
     }
+    all.print_text(all.raw_prediction, outputStringStream.str(), ec.tag);
+  }
 
-    //now this is a training example
-    c.known_cost = get_observed_cost(ld);
-    c.min_cost = min (c.min_cost, c.known_cost->cost);
-    c.max_cost = max (c.max_cost, c.known_cost->cost);
-    
-    //generate a cost-sensitive example to update classifiers
-    switch(c.cb_type)
-    {
-      case CB_TYPE_IPS:
-        gen_cs_example_ips(*all,c,ec,c.cb_cs_ld);
-        break;
-      case CB_TYPE_DM:
-        gen_cs_example_dm<is_learn>(*all,c,ec,c.cb_cs_ld);
-        break;
-      case CB_TYPE_DR:
-        gen_cs_example_dr<is_learn>(*all,c,ec,c.cb_cs_ld);
-        break;
-      default:
-        std::cerr << "Unknown cb_type specified for contextual bandit learning: " << c.cb_type << ". Exiting." << endl;
-        throw exception();
+  print_update(all, is_test_label(ld), ec, nullptr, false);
+}
+
+void finish(cb& c)
+{ c.cb_cs_ld.costs.delete_v(); c.pred_scores.costs.delete_v();}
+
+void finish_example(vw& all, cb& c, example& ec)
+{ output_example(all, c, ec, ec.l.cb);
+  VW::finish_example(all, &ec);
+}
+
+void eval_finish_example(vw& all, cb& c, example& ec)
+{ output_example(all, c, ec, ec.l.cb_eval.event);
+  VW::finish_example(all, &ec);
+}
+
+base_learner* cb_algs_setup(vw& all)
+{ if (missing_option<size_t, true>(all, "cb", "Use contextual bandit learning with <k> costs"))
+    return nullptr;
+  new_options(all, "CB options")
+  ("cb_type", po::value<string>(), "contextual bandit method to use in {ips,dm,dr}")
+  ("eval", "Evaluate a policy rather than optimizing.");
+  add_options(all);
+
+  cb& c = calloc_or_throw<cb>();
+  c.num_actions = (uint32_t)all.vm["cb"].as<size_t>();
+
+  bool eval = false;
+  if (all.vm.count("eval"))
+    eval = true;
+
+  size_t problem_multiplier = 2;//default for DR
+  if (all.vm.count("cb_type"))
+  { std::string type_string;
+
+    type_string = all.vm["cb_type"].as<std::string>();
+    *all.file_options << " --cb_type " << type_string;
+
+    if (type_string.compare("dr") == 0)
+      c.cb_type = CB_TYPE_DR;
+    else if (type_string.compare("dm") == 0)
+    { if (eval)
+        THROW( "direct method can not be used for evaluation --- it is biased.");
+
+      c.cb_type = CB_TYPE_DM;
+      problem_multiplier = 1;
     }
-
-    if (c.cb_type != CB_TYPE_DM)
-      {
-	ec.ld = &c.cb_cs_ld;
-
-	if (is_learn)
-	  base.learn(ec);
-	else
-	  base.predict(ec);
-
-	ec.ld = ld;
-        for (size_t i=0; i<ld->costs.size(); i++)
-          ld->costs[i].partial_prediction = c.cb_cs_ld.costs[i].partial_prediction;
-      }
-  }
-
-  void init_driver(cb&)
-  {
-    fprintf(stderr, "*estimate* *estimate*                                                avglossreg last pred  last correct\n");
-  }
-
-  void print_update(vw& all, cb& c, bool is_test, example& ec)
-  {
-    if (all.sd->weighted_examples >= all.sd->dump_interval && !all.quiet && !all.bfgs)
-      {
-        char label_buf[32];
-        if (is_test)
-          strcpy(label_buf," unknown");
-        else
-          sprintf(label_buf," known");
-
-        if(!all.holdout_set_off && all.current_pass >= 1)
-        {
-          if(all.sd->holdout_sum_loss == 0. && all.sd->weighted_holdout_examples == 0.)
-            fprintf(stderr, " unknown   ");
-          else
-	    fprintf(stderr, "%-10.6f " , all.sd->holdout_sum_loss/all.sd->weighted_holdout_examples);
-
-          if(all.sd->holdout_sum_loss_since_last_dump == 0. && all.sd->weighted_holdout_examples_since_last_dump == 0.)
-            fprintf(stderr, " unknown   ");
-          else
-	    fprintf(stderr, "%-10.6f " , all.sd->holdout_sum_loss_since_last_dump/all.sd->weighted_holdout_examples_since_last_dump);
-        
-          fprintf(stderr, "%8ld %8.1f   %s %8lu %8lu   %-10.6f %-10.6f %-10.6f h\n",
-	      (long int)all.sd->example_number,
-	      all.sd->weighted_examples,
-	      label_buf,
-              (long unsigned int)ec.final_prediction,
-              (long unsigned int)ec.num_features,
-              c.avg_loss_regressors,
-              c.last_pred_reg,
-              c.last_correct_cost);
-
-          all.sd->weighted_holdout_examples_since_last_dump = 0;
-          all.sd->holdout_sum_loss_since_last_dump = 0.0;
-        }
-        else
-          fprintf(stderr, "%-10.6f %-10.6f %8ld %8.1f   %s %8lu %8lu   %-10.6f %-10.6f %-10.6f\n",
-                all.sd->sum_loss/all.sd->weighted_examples,
-                all.sd->sum_loss_since_last_dump / (all.sd->weighted_examples - all.sd->old_weighted_examples),
-                (long int)all.sd->example_number,
-                all.sd->weighted_examples,
-                label_buf,
-                (long unsigned int)ec.final_prediction,
-                (long unsigned int)ec.num_features,
-                c.avg_loss_regressors,
-                c.last_pred_reg,
-                c.last_correct_cost);
-     
-        all.sd->sum_loss_since_last_dump = 0.0;
-        all.sd->old_weighted_examples = all.sd->weighted_examples;
-	fflush(stderr);
-        VW::update_dump_interval(all);
-      }
-  }
-
-  void output_example(vw& all, cb& c, example& ec)
-  {
-    CB::label* ld = (CB::label*)ec.ld;
-
-    float loss = 0.;
-    if (!is_test_label(ld))
-      {//need to compute exact loss
-        size_t pred = (size_t)ec.final_prediction;
-
-        float chosen_loss = FLT_MAX;
-        if( know_all_cost_example(ld) ) {
-          for (cb_class *cl = ld->costs.begin; cl != ld->costs.end; cl ++) {
-            if (cl->action == pred)
-              chosen_loss = cl->cost;
-          }
-        }
-        else {
-          //we do not know exact cost of each action, so evaluate on generated cost-sensitive example currently stored in cb_cs_ld
-          for (COST_SENSITIVE::wclass *cl = c.cb_cs_ld.costs.begin; cl != c.cb_cs_ld.costs.end; cl ++) {
-            if (cl->weight_index == pred)
-	      {
-		chosen_loss = cl->x;
-		if (c.known_cost->action == pred && c.cb_type == CB_TYPE_DM) 
-		  chosen_loss += (c.known_cost->cost - chosen_loss) / c.known_cost->probability;
-	      }
-          }
-        }
-        if (chosen_loss == FLT_MAX)
-          cerr << "warning: cb predicted an invalid class" << endl;
-
-        loss = chosen_loss;
-      }
-
-    if(ec.test_only)
-    {
-      all.sd->weighted_holdout_examples += ec.global_weight;//test weight seen
-      all.sd->weighted_holdout_examples_since_last_dump += ec.global_weight;
-      all.sd->weighted_holdout_examples_since_last_pass += ec.global_weight;
-      all.sd->holdout_sum_loss += loss;
-      all.sd->holdout_sum_loss_since_last_dump += loss;
-      all.sd->holdout_sum_loss_since_last_pass += loss;//since last pass
+    else if (type_string.compare("ips") == 0)
+    { c.cb_type = CB_TYPE_IPS;
+      problem_multiplier = 1;
     }
     else
-    {
-      all.sd->sum_loss += loss;
-      all.sd->sum_loss_since_last_dump += loss;
-      all.sd->weighted_examples += 1.;
-      all.sd->total_features += ec.num_features;
-      all.sd->example_number++;
+    { std::cerr << "warning: cb_type must be in {'ips','dm','dr'}; resetting to dr." << std::endl;
+      c.cb_type = CB_TYPE_DR;
     }
-
-    for (size_t i = 0; i<all.final_prediction_sink.size(); i++)
-      {
-        int f = all.final_prediction_sink[i];
-        all.print(f, ec.final_prediction, 0, ec.tag);
-      }
-  
-
-
-    print_update(all, c, is_test_label((CB::label*)ec.ld), ec);
+  }
+  else
+  { //by default use doubly robust
+    c.cb_type = CB_TYPE_DR;
+    *all.file_options << " --cb_type dr";
   }
 
-  void finish(cb& c)
-  {
-    c.cb_cs_ld.costs.delete_v();
+  if (count(all.args.begin(), all.args.end(),"--csoaa") == 0)
+  { all.args.push_back("--csoaa");
+    stringstream ss;
+    ss << all.vm["cb"].as<size_t>();
+    all.args.push_back(ss.str());
   }
 
-  void finish_example(vw& all, cb& c, example& ec)
-  {
-    output_example(all, c, ec);
-    VW::finish_example(all, &ec);
+  base_learner* base = setup_base(all);
+  if (eval)
+    all.p->lp = CB_EVAL::cb_eval;
+  else
+    all.p->lp = CB::cb_label;
+
+  learner<cb>* l;
+  if (eval)
+  { l = &init_learner(&c, base, learn_eval, predict_eval, problem_multiplier);
+    l->set_finish_example(eval_finish_example);
   }
-
-  learner* setup(vw& all, std::vector<std::string>&opts, po::variables_map& vm, po::variables_map& vm_file)
-  {
-    cb* c = (cb*)calloc_or_die(1, sizeof(cb));
-    c->all = &all;
-    c->min_cost = 0.;
-    c->max_cost = 1.;
-    po::options_description desc("CB options");
-    desc.add_options()
-      ("cb_type", po::value<string>(), "contextual bandit method to use in {ips,dm,dr}");
-
-    po::parsed_options parsed = po::command_line_parser(opts).
-      style(po::command_line_style::default_style ^ po::command_line_style::allow_guessing).
-      options(desc).allow_unregistered().run();
-    opts = po::collect_unrecognized(parsed.options, po::include_positional);
-    po::store(parsed, vm);
-    po::notify(vm);
-
-    po::parsed_options parsed_file = po::command_line_parser(all.options_from_file_argc,all.options_from_file_argv).
-      style(po::command_line_style::default_style ^ po::command_line_style::allow_guessing).
-      options(desc).allow_unregistered().run();
-    po::store(parsed_file, vm_file);
-    po::notify(vm_file);
-
-    uint32_t nb_actions = 0;
-    if( vm_file.count("cb") ) { //if loaded options from regressor file already
-      nb_actions = (uint32_t)vm_file["cb"].as<size_t>();
-      if( vm.count("cb") && (uint32_t)vm["cb"].as<size_t>() != nb_actions )
-        std::cerr << "warning: you specified a different number of actions through --cb than the one loaded from regressor. Pursuing with loaded value of: " << nb_actions << endl;
-    }
-    else {
-      nb_actions = (uint32_t)vm["cb"].as<size_t>();
-      //append cb with nb_actions to options_from_file so it is saved to regressor later
-      std::stringstream ss;
-      ss << " --cb " << nb_actions;
-      all.options_from_file.append(ss.str());
-    }
-    all.sd->k = nb_actions;
-
-    size_t problem_multiplier = 2;//default for DR
-    if (vm.count("cb_type") || vm_file.count("cb_type"))
-    {
-      std::string type_string;
-
-      if(vm_file.count("cb_type")) {
-        type_string = vm_file["cb_type"].as<std::string>();
-        if( vm.count("cb_type") && type_string.compare(vm["cb_type"].as<string>()) != 0)
-          cerr << "You specified a different --cb_type than the one loaded from regressor file. Pursuing with loaded value of: " << type_string << endl;
-      }
-      else {
-        type_string = vm["cb_type"].as<std::string>();
-
-        all.options_from_file.append(" --cb_type ");
-        all.options_from_file.append(type_string);
-      }
-
-      if (type_string.compare("dr") == 0) 
-        c->cb_type = CB_TYPE_DR;
-      else if (type_string.compare("dm") == 0)
-	{
-	  c->cb_type = CB_TYPE_DM;
-	  problem_multiplier = 1;
-	}
-      else if (type_string.compare("ips") == 0)
-	{
-	  c->cb_type = CB_TYPE_IPS;
-	  problem_multiplier = 1;
-	}
-      else {
-        std::cerr << "warning: cb_type must be in {'ips','dm','dr'}; resetting to dr." << std::endl;
-        c->cb_type = CB_TYPE_DR;
-      }
-    }
-    else {
-      //by default use doubly robust
-      c->cb_type = CB_TYPE_DR;
-      all.options_from_file.append(" --cb_type dr");
-    }
-
-    all.p->lp = CB::cb_label_parser; 
-
-    learner* l = new learner(c, all.l, problem_multiplier);
-    l->set_learn<cb, predict_or_learn<true> >();
-    l->set_predict<cb, predict_or_learn<false> >();
-    l->set_finish_example<cb,finish_example>(); 
-    l->set_init_driver<cb,init_driver>();
-    l->set_finish<cb,finish>();
-    // preserve the increment of the base learner since we are
-    // _adding_ to the number of problems rather than multiplying.
-    l->increment = all.l->increment; 
-
-    return l;
+  else
+  { l = &init_learner(&c, base, predict_or_learn<true>, predict_or_learn<false>,
+                      problem_multiplier);
+    l->set_finish_example(finish_example);
   }
+  // preserve the increment of the base learner since we are
+  // _adding_ to the number of problems rather than multiplying.
+  l->increment = base->increment;
+  c.scorer = all.scorer;
+
+  l->set_finish(finish);
+  return make_base(*l);
 }

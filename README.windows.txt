@@ -1,144 +1,163 @@
-Building VW on Windows
+Originally by Chris Quirk <chrisq@microsoft.com>
+**************************************************************************************************************
+Notes for building VW under Visual Studio 2013 on Windows 8.1
+9/02/2014 Nick Nussbaum nickn@seanet.com
 
-8/15/2012, Chris Quirk <chrisq@microsoft.com>
+Replace source dependencies with Nuget
+04/29/2015 Sharat Chikkerur sharat.chikkerur@gmail.com
 
-You need Visual Studio 2010
+Added ANTLR based unit test
+10/2/2015 Markus Cozowicz marcozo@microsoft.com
 
-(1) Install boost 1.50. There are several options available.
+**************************************************************************************************************
+(1) Get Tools
+You'll need a Visual Studio 2013 (or 2015) installed that includes c# and c++
+You should install Visual Studio 2013 Update 5: https://www.microsoft.com/en-us/download/details.aspx?id=48129
+You'll also need the Windows SDK which you can download from Microsoft at
+	http://msdn.microsoft.com/en-us/windows/desktop/bg162891.aspx
 
-  (This must have the correct absolute path for builds to work)
+You'll need Nuget integration with visual studio
+	http://docs.nuget.org/consume
 
-    ==> Get pre-built binaries from someone else.
+You'll need Java to run unit tests
+	http://www.oracle.com/technetwork/java/javase/downloads/jre8-downloads-2133155.html
+**************************************************************************************************************
+(2) open a copy various command shells
 
-      (a) Download my pre-built boost-1.50-bins.zip from SkyDrive:
+	(a)	Open an x86 command shell: run the Visual Studio 2013 Tools /  VS2013 x86 Native Tools Command Prompt
+			or 
+			cmd.exe /k "C:\Program Files (x86)\Microsoft Visual Studio 12.0\VC\vcvarsall.bat" x86
+	(b)	Open an x64 command shell: run the Visual Studio 2013 Tools / VS2013 x64 Cross Tools Command Prompt
+			or 
+			cmd.exe /k "C:\Program Files (x86)\Microsoft Visual Studio 12.0\VC\vcvarsall.bat" x86_amd64
+	(c)	Open the Git bash shell
+		"C:\Program Files (x86)\Git\bin\sh.exe" --login -i
+		or some other bash shell
 
-            http://sdrv.ms/RXV5gt
+**************************************************************************************************************
+(3) Setup Directories
 
-      (b) Unzip in the root of your C: drive, so you should have c:\boost\x86 and c:\boost\x64 directories.
+I use c:\src\vw as my %ROOT% directory; 
+
+        (a) mkdir c:\src
+        (b) mkdir c:\src\vw
+
+**************************************************************************************************************
+(4) Get Vowpal Wabbit 
+
+    (a) In a  command shell to %ROOT% : "cd c:\src\vw"
+    (b) run "git clone https://github.com/JohnLangford/vowpal_wabbit.git"
+	details of the changes are in bottom of this file.
+
+**************************************************************************************************************
+(5) Restore nugets
 
 
-    ==> Build boost from scratch:
+    (a) In a  command shell to %ROOT%\vowpalwabbit : "cd c:\src\vw\vowpalwabbit" 
+    (b) run ".nuget\NuGet.exe restore vw.sln"
+	This will restore the ANTLR nuget which is needed before Visual Studio loads the solution.	
 
-      (a) Download boost_1_50_0.zip from here http://sourceforge.net/projects/boost/files/boost/1.50.0/
-      (b) Unzip to someplace convenient (I use c:\src)
-      (c) Open a new command window
-      (d) Run "C:\Program Files (x86)\Microsoft Visual Studio 10.0\VC\bin\vcvars32.bat" to set build variables
-      (e) cd to the directory where you unzipped boost, and run "bootstrap.bat"
-      (f) Run "mkdir c:\boost"
-      (g) Run "mkdir c:\boost\x86"
-      (h) Run "mkdir c:\boost\x64"
-      (i) cd c:\src
-      (j) bootstrap.bat
-      (k) Run "b2 --prefix=c:\boost\x86 --build-dir=x86 --toolset=msvc install --with-program_options" (I add " -j 16" to the end to run up to 16 procs at once.)
-      (l) Run "b2 --prefix=c:\boost\x64 --build-dir=x64 --toolset=msvc address-model=64 install --with-program_options"
+**************************************************************************************************************
+(5) Build Vowpal Wabbit 
 
-f you have multiple Visual Studios installed (vs2012 and vs2010) explicitly specify the toolset version
-	  toolset=msvc-10.0
-	 
-	  
-    ==> Get pre-built binaries from boostpro -- BUT ONLY 32 BIT BINS ARE AVAILABLE
+	(a) Using visual studio
+	Open %ROOT%\vowpal_wabbit\vowpalwabbit\vw.sln in Visual Studio 2013
+	Set startup project as vw (or the test project)
+     	
+	Select x64 platform (Configuration Manager \ Active solution platfrom)
+	Select x64 as test platform (Test \ Test settings \ Default Processor Architecture)
 
-          http://boostpro.com/download/boost_1_50_setup.exe
+	run  build>rebuild solution
+		or run  batch build
+    Binaries will be in one of these four directories, based on whether you built DEBUG or RELEASE bits and whether you are building x64.
 
-          NOTE -- be sure to install binaries for VS 2010, and to check
-                  ALL OF THE BOXES on the right hand side! If you get a
-                  boost link error, this is the most likely culprit!
+		%ROOT%\vowpal_wabbit\vowpalwabbit\x64\Debug\vw.exe
+		%ROOT%\vowpal_wabbit\vowpalwabbit\x64\Release\vw.exe
+	Missing nugets will be installed during the build.
 
-          ALSO NOTE -- you'll need to install more information
+	(b) Using command line (available configurations are "Release" and "Debug". Available platforms are "x64" and "Win32")
+	run>msbuild /p:Configuration="Release" /p:Platform="x64" vw.sln
+	
+	
+	Note: If you failed to do so before opening the solution, the cs_unittest
+	project is in a "not loaded" state. After executing the above you'll have to
+	hit "Reload" (Project / Context Menu) in Visual Studio.
 
-(2) Pick a base directory for sources -- I'll use c:\src\vw
+**************************************************************************************************************
+(8) Test
+	There's a new test batch file that runs a quick test on all four configurations
+	(a) go to a windows command shell
+	(a) cd c:\src\vw\test
+ 	(b) run test\test_2_winvw.bat
 
-(3) Download zlib from here:
 
-  http://zlib.net/zlib128.zip
+**************************************************************************************************************
+(9) Appendix: The Gory Details of the patch and VW upgrades
 
-(4) Unzip to %ROOT% -- on my machine, this lands in c:\src\vw\zlib-1.2.8.
+(a) misc files
+	   adds this content to this file ReadMe.Windows.txt
+	   adds the  file vowpal_wabbit\zlibpatch.txt a patch for xlib
+	   adds the file test\test_2_winvw.bat a simple test of x86 and x64 training and prediction
 
-  (This must have the correct relative path for builds to work)
 
-(5) Build zlib
+(b) Changes to Zlib
+This Zlib patch includes the following fixes;
 
-    (a) Start a new CMD window
-    (b) Run "C:\Program Files (x86)\Microsoft Visual Studio 10.0\VC\bin\vcvars32.bat" to set build variables
-    (c) Go to the %ROOT%\zlib-1.2.8\zlib-1.2.8\contrib\vstudio\vc10 directory (for me, c:\src\vw\zlib-1.2.8\zlib-1.2.8\contrib\vstudio\vc10)
-    (d) Patch up the zlibstat.vcxproj to correctly use DLL versions of the runtime for 32bit platforms (ugh).  This requires editing lines 167, 194, 222:
+Convert to Visual Studio 2013 solution
 
-***************
-*** 164,170 ****
-        <PreprocessorDefinitions>WIN32;ZLIB_WINAPI;_CRT_NONSTDC_NO_DEPRECATE;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_WARNINGS;%(PreprocessorDefinitio
-ns)</PreprocessorDefinitions>
-        <ExceptionHandling>
-        </ExceptionHandling>
-!       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
-        <BufferSecurityCheck>false</BufferSecurityCheck>
-        <PrecompiledHeaderOutputFile>$(IntDir)zlibstat.pch</PrecompiledHeaderOutputFile>
-        <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
---- 164,170 ----
-        <PreprocessorDefinitions>WIN32;ZLIB_WINAPI;_CRT_NONSTDC_NO_DEPRECATE;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_WARNINGS;%(PreprocessorDefinitio
-ns)</PreprocessorDefinitions>
-        <ExceptionHandling>
-        </ExceptionHandling>
-!       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
-        <BufferSecurityCheck>false</BufferSecurityCheck>
-        <PrecompiledHeaderOutputFile>$(IntDir)zlibstat.pch</PrecompiledHeaderOutputFile>
-        <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
-***************
-*** 191,197 ****
-        <StringPooling>true</StringPooling>
-        <ExceptionHandling>
-        </ExceptionHandling>
-!       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
-        <BufferSecurityCheck>false</BufferSecurityCheck>
-        <FunctionLevelLinking>true</FunctionLevelLinking>
-        <PrecompiledHeaderOutputFile>$(IntDir)zlibstat.pch</PrecompiledHeaderOutputFile>
---- 191,197 ----
-        <StringPooling>true</StringPooling>
-        <ExceptionHandling>
-        </ExceptionHandling>
-!       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
-        <BufferSecurityCheck>false</BufferSecurityCheck>
-        <FunctionLevelLinking>true</FunctionLevelLinking>
-        <PrecompiledHeaderOutputFile>$(IntDir)zlibstat.pch</PrecompiledHeaderOutputFile>
-***************
-*** 219,225 ****
-        <StringPooling>true</StringPooling>
-        <ExceptionHandling>
-        </ExceptionHandling>
-!       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
-        <BufferSecurityCheck>false</BufferSecurityCheck>
-        <FunctionLevelLinking>true</FunctionLevelLinking>
-        <PrecompiledHeaderOutputFile>$(IntDir)zlibstat.pch</PrecompiledHeaderOutputFile>
---- 219,225 ----
-        <StringPooling>true</StringPooling>
-        <ExceptionHandling>
-        </ExceptionHandling>
-!       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
-        <BufferSecurityCheck>false</BufferSecurityCheck>
-        <FunctionLevelLinking>true</FunctionLevelLinking>
-        <PrecompiledHeaderOutputFile>$(IntDir)zlibstat.pch</PrecompiledHeaderOutputFile>
-***************
+The fix in the prior section to correctly use DLL versions of the runtime for 32bit platforms
+Changes to use only two fields in zlibvc.def VERSTION 
+-	VERSION		1.2.8
++	VERSION		1.28
+since otherwise the compiler will complain about more than 2 fields and ignore them.
 
-    (e) Run the following four commands (can skip the last two if you only want 32bit binaries)
+add /safeseh to the x86 assembler so Visual Studio will not generate an error "unable to generate SAFESSH image"
+This is not need for x64 since it happens by default
 
-        "msbuild /p:Configuration=Debug;Platform=Win32 zlibstat.vcxproj"
-        "msbuild /p:Configuration=Release;Platform=Win32 zlibvc.vcxproj"
-        "msbuild /p:Configuration=Release;Platform=Win32 zlibstat.vcxproj"
-        "msbuild /p:Configuration=Debug;Platform=x64 zlibstat.vcxproj"
-        "msbuild /p:Configuration=Release;Platform=x64 zlibvc.vcxproj"
-        "msbuild /p:Configuration=Release;Platform=x64 zlibstat.vcxproj"
 
-(6) Get a copy of VW in %ROOT%. I ran "cd \src\vw" and "git clone http
+In the properties sheet for zlibvc
 
-    (a) Change to root (for me, "cd \src\vw")
-    (b) "git clone https://github.com/JohnLangford/vowpal_wabbit.git"
+The pre build command line for x64 release should be fixed
+-cd ..\..\contrib\masmx64
++cd ..\..\masmx64
 
-(7) Open %ROOT%\vowpal_wabbit\vowpalwabbit\vw.sln in Visual Studio 2010 and hit Build.
+ Code generation: Runtime Library for windows release  set to  Multi-threaded DLL (/MD) not /MT for zlibvc and zlibstat
+Otherwise VS13 will complain about multiple runtime specification while trying to autolink
 
-(8) Build. Binaries will be in one of these four directories, based on whether you built DEBUG or RELEASE bits and whether you are building x64 or Win32.
 
-  %ROOT%\vowpal_wabbit\vowpalwabbit\Debug\vw.exe
-  %ROOT%\vowpal_wabbit\vowpalwabbit\Release\vw.exe
-  %ROOT%\vowpal_wabbit\vowpalwabbit\x64\Debug\vw.exe
-  %ROOT%\vowpal_wabbit\vowpalwabbit\x64\Release\vw.exe
+(c) Change to Boost 1.56.0
+
+(d) Changes to VowpalWabbit
+	
+	changes vw projects and solutions to run under Visual Studio 2013 rather than Visual Studio 2012
+	change vw projects to redefine $(BoostIncludeDir) to refer to Boost 1.56.0
+	change vw projects to define $(BoostLibDir) to refer to Boost 1.56.0
+
+	vowpalwabbit/vw_static.vcxproj
+		Define $(IncludePath) 
+		change 	$(ZlibDir) to use \contrib\vstudio\vc11 rather than vc10
+		change x64 version DebugInformationFormat  to use "ProgramDatabase" and not the invalid "EditAndContinue"
+
+		change IntermediateFolderPath to include ProjectName so two projects aren't trying to build in the same folder
+		add searn_multiclasstask.cc to the project
+		change include path to all use macros $(VC_IncludePath);$(WindowsSDK_IncludePath)
+		change additional dependencies to use  $(SolutionDir)$(PlatformShortName)\$(Configuration)\vw_static.lib
+
+	   	adds a reference to the WindowsSDKDir Include\um
+ 		change vw_static properties for debug 64bit to /Zi from /Zl to shut up some warnings.
+ 		change the vw and static_vw to use n intermediate directories that appends the $(ProjectName). 
+		this avoid various conflicts and warnings caused by dumping into the same directory.
+		change link build copies to use PlatformShortName rather than PlatformName to use x86 rather than Win32
+		Change the anycpu confuuration for problems with cs_test
+	
+
+     vowpalwabbit/vw.sln
+		change configurations to use Debug|x86 from Debug|AnyCpu 
+
+     c_test/c_test.vcxproj
+		change to VS 12
+		change configurations to use Debug|x86 from Debug|AnyCpu 
+		change cs_test to use x86 and x64 rather than anycpu
+		change test file specs to reference the .../../... test directory 
 
 

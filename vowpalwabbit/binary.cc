@@ -1,44 +1,34 @@
+#include <float.h>
 #include "reductions.h"
-#include "multiclass.h"
-#include "simple_label.h"
 
-using namespace LEARNER;
+template <bool is_learn>
+void predict_or_learn(char&, LEARNER::base_learner& base, example& ec)
+{ if (is_learn)
+    base.learn(ec);
+  else
+    base.predict(ec);
 
-namespace BINARY {
+  if ( ec.pred.scalar > 0)
+    ec.pred.scalar = 1;
+  else
+    ec.pred.scalar = -1;
 
-  template <bool is_learn>
-  void predict_or_learn(float&, learner& base, example& ec) {
-    if (is_learn)
-      base.learn(ec);
-    else
-      base.predict(ec);
-
-    if ( ec.final_prediction > 0)
-      ec.final_prediction = 1;
-    else
-      ec.final_prediction = -1;
-
-    label_data* ld = (label_data*)ec.ld;//New loss
-    if (ld->label == ec.final_prediction)
+  if (ec.l.simple.label != FLT_MAX)
+  { if (fabs(ec.l.simple.label) != 1.f)
+      cout << "You are using label " << ec.l.simple.label << " not -1 or 1 as loss function expects!" << endl;
+    else if (ec.l.simple.label == ec.pred.scalar)
       ec.loss = 0.;
     else
-      ec.loss = 1.;
+      ec.loss = ec.weight;
   }
+}
 
-  learner* setup(vw& all, std::vector<std::string>&opts, po::variables_map& vm, po::variables_map& vm_file)
-  {//parse and set arguments
-    if (!vm_file.count("binary"))
-      {
-	std::stringstream ss;
-	ss << " --binary ";
-	all.options_from_file.append(ss.str());
-      }
+LEARNER::base_learner* binary_setup(vw& all)
+{ if (missing_option(all, false, "binary", "report loss as binary classification on -1,1"))
+    return nullptr;
 
-    all.sd->binary_label = true;
-    //Create new learner
-    learner* ret = new learner(NULL, all.l);
-    ret->set_learn<float, predict_or_learn<true> >();
-    ret->set_predict<float, predict_or_learn<false> >();
-    return ret;
-  }
+  LEARNER::learner<char>& ret =
+    LEARNER::init_learner<char>(nullptr, setup_base(all),
+                                predict_or_learn<true>, predict_or_learn<false>);
+  return make_base(ret);
 }

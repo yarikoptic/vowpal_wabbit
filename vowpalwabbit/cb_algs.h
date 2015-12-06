@@ -3,42 +3,45 @@ Copyright (c) by respective owners including Yahoo!, Microsoft, and
 individual contributors. All rights reserved.  Released under a BSD
 license as described in the file LICENSE.
  */
-#ifndef CB_ALGS_H
-#define CB_ALGS_H
-
+#pragma once
 //TODO: extend to handle CSOAA_LDF and WAP_LDF
-namespace CB_ALGS {
+LEARNER::base_learner* cb_algs_setup(vw& all);
 
-  LEARNER::learner* setup(vw& all, std::vector<std::string>&, po::variables_map& vm, po::variables_map& vm_file);
+namespace CB_ALGS
+{
+template <bool is_learn>
+float get_cost_pred(LEARNER::base_learner* scorer, CB::cb_class* known_cost, example& ec, uint32_t index, uint32_t base)
+{ CB::label ld = ec.l.cb;
 
-  template <bool is_learn>
-    float get_cost_pred(vw& all, CB::cb_class* known_cost, example& ec, uint32_t index, uint32_t base)
-  {
-    CB::label* ld = (CB::label*)ec.ld;
+  label_data simple_temp;
+  simple_temp.initial = 0.;
+  if (known_cost != nullptr && index == known_cost->action)
+    simple_temp.label = known_cost->cost;
+  else
+    simple_temp.label = FLT_MAX;
 
-    label_data simple_temp;
-    simple_temp.initial = 0.;
-    if (known_cost != NULL && index == known_cost->action)
-      {
-	simple_temp.label = known_cost->cost;
-	simple_temp.weight = 1.;
-      }
-    else 
-      {
-	simple_temp.label = FLT_MAX;
-	simple_temp.weight = 0.;
-      }
-    
-    ec.ld = &simple_temp;
+  ec.l.simple = simple_temp;
+  polyprediction p = ec.pred;
 
-    if (is_learn)
-      all.scorer->learn(ec, index-1+base);
-    else
-      all.scorer->predict(ec, index-1+base);
-    ec.ld = ld;
-
-    return ec.final_prediction;
+  if (is_learn && simple_temp.label != FLT_MAX)
+  { float old_weight = ec.weight;
+    ec.weight = 1.f;
+    scorer->learn(ec, index-1+base);
+    ec.weight = old_weight;
   }
+  else
+    scorer->predict(ec, index-1+base);
+
+  float pred = ec.pred.scalar;
+  ec.pred = p;
+
+  ec.l.cb = ld;
+
+  return pred;
 }
 
-#endif
+
+}
+
+float get_unbiased_cost(CB::cb_class* known_cost, COST_SENSITIVE::label& cb_label, uint32_t action);
+

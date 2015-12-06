@@ -3,55 +3,27 @@ Copyright (c) by respective owners including Yahoo!, Microsoft, and
 individual contributors. All rights reserved.  Released under a BSD
 license as described in the file LICENSE.
  */
-#ifndef MULTICLASS_H
-#define MULTICLASS_H
+#pragma once
+#include "label_parser.h"
 
-#include "io_buf.h"
-#include "parse_primitives.h"
-#include "example.h"
+struct example;
+struct vw;
 
 namespace MULTICLASS
 {
+struct label_t
+{ uint32_t label;
+  float weight;
+};
 
-  struct mc_label {
-    uint32_t label;
-    float weight;
-  };
-  
-  size_t read_cached_label(shared_data*, void* v, io_buf& cache);
-  void cache_label(void* v, io_buf& cache);
-  void default_label(void* v);
-  void parse_label(parser* p, shared_data*, void* v, v_array<substring>& words);
-  void delete_label(void* v);
-  float weight(void* v);
-  const label_parser mc_label_parser = {default_label, parse_label, 
-					cache_label, read_cached_label, 
-					delete_label, weight, 
-                                        NULL,
-					sizeof(mc_label)};
-  
-  void output_example(vw& all, example& ec);
+extern label_parser mc_label;
 
-  inline int label_is_test(mc_label* ld)
-  { return ld->label == (uint32_t)-1; }
+void print_update_with_probability(vw& all, example &ec, uint32_t prediction);
 
-  inline int example_is_test(example* ec)
-  { return label_is_test((mc_label*)ec->ld); }
+void finish_example(vw& all, example& ec);
 
+template <class T> void finish_example(vw& all, T&, example& ec) { finish_example(all, ec); }
+
+inline bool label_is_test(label_t* ld)
+{ return ld->label == (uint32_t)-1; }
 }
-
-#endif
-
-
-
-
-
-
-
-
-
-
-
-
-
-

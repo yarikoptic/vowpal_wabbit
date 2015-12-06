@@ -6,10 +6,10 @@ VW=../../vowpalwabbit/vw
 all:
 	@cat README.md
 
-shootout: $(foreach what,linear lrq lrqdropout,$(what).print)
+shootout: $(foreach what,linear lrq lrqdropout lrqdropouthogwild,$(what).print)
 
 clean:
-	rm -f $(wildcard *results*) $(wildcard *.vw)
+	rm -f $(wildcard *results*) $(wildcard *.vw) $(wildcard *.model.txt) $(wildcard *.pdf)
 
 ml-%.zip:
 	@echo "downloading movielens $*"
@@ -39,7 +39,7 @@ ml-%.ratings.train.vw: ml-%/ratings.dat
 	@printf "%s test MAE is %3.3f\n" $* $$(cat $*.results)
 
 #---------------------------------------------------------------------
-#               linear model (no interaction terms)               
+#               linear model (no interaction terms)
 #---------------------------------------------------------------------
 
 linear.results: ml-1m.ratings.test.vw ml-1m.ratings.train.vw
@@ -58,6 +58,11 @@ linear.results: ml-1m.ratings.test.vw ml-1m.ratings.train.vw
 	  -d $(word 1,$+) -p						\
 	  >(perl -lane '$$s+=abs(($$F[0]-$$F[1])); } { 			\
 			1; print $$s/$$.;' > $@)
+	@echo "****************************************************"
+	@echo "*   saving human readable model (--invert_hash)    *"
+	@echo "****************************************************"
+	@echo
+	@${VW} -i $@.model -t --invert_hash $@.model.txt -d $(word 2,$+)
 	@rm -f $@.cache $@.model
 
 #---------------------------------------------------------------------
@@ -73,7 +78,7 @@ lrq.results: ml-1m.ratings.test.vw ml-1m.ratings.train.vw
 	@echo
 	@${VW} --loss_function quantile -l 0.1 -b 24 --passes 100 	\
 	  -k --cache_file $@.cache -d $(word 2,$+) --holdout_off	\
-	  --l2 1e-6 --lrq um7 --adaptive --invariant -f $@.model
+	  --power_t 0.333 --l2 1.25e-7 --lrq um7 --adaptive --invariant -f $@.model
 	@echo "********************************************************"
 	@echo "* testing low-rank interaction model (without dropout) *"
 	@echo "********************************************************"
@@ -82,6 +87,11 @@ lrq.results: ml-1m.ratings.test.vw ml-1m.ratings.train.vw
 	  -d $(word 1,$+) -p						\
 	  >(perl -lane '$$s+=abs(($$F[0]-$$F[1])); } { 			\
 			1; print $$s/$$.;' > $@)
+	@echo "****************************************************"
+	@echo "*   saving human readable model (--invert_hash)    *"
+	@echo "****************************************************"
+	@echo
+	@${VW} -i $@.model -t --invert_hash $@.model.txt -d $(word 2,$+)
 	@rm -f $@.cache $@.model
 
 #---------------------------------------------------------------------
@@ -106,4 +116,43 @@ lrqdropout.results: ml-1m.ratings.test.vw ml-1m.ratings.train.vw
 	  -d $(word 1,$+) -p						\
 	  >(perl -lane '$$s+=abs(($$F[0]-$$F[1])); } { 			\
 			1; print $$s/$$.;' > $@)
+	@echo "****************************************************"
+	@echo "*   saving human readable model (--invert_hash)    *"
+	@echo "****************************************************"
+	@echo
+	@${VW} -i $@.model -t --invert_hash $@.model.txt -d $(word 2,$+)
 	@rm -f $@.cache $@.model
+
+movie_dendrogram.pdf: lrqdropout.results
+	@echo "*******************************************************"
+	@echo "* Generating movie clustering based on latent factors *"
+	@echo "*         (Requires an installation of R)             *"
+	@echo "*******************************************************"
+	@grep ^lrq^m $<.model.txt | tr '^' ':' > $<.model.csv
+	@Rscript visualize_factors.R
+	@rm -f $@.model.csv
+
+#---------------------------------------------------------------------
+#               low-rank interaction model (with dropout)
+#                  (HOGWILD training mode)
+#---------------------------------------------------------------------
+
+lrqdropouthogwild.results: ml-1m.ratings.test.vw ml-1m.ratings.train.vw do-lrq-hogwild
+	@echo "******************************************************"
+	@echo "* training low-rank interaction model (with dropout) *"
+	@echo "*      (HOGWILD training mode)                       *"
+	@echo "*                                                    *"
+	@echo "* vw --lrq um14 --lrqdropout ...                     *"
+	@echo "******************************************************"
+	@echo
+	@./do-lrq-hogwild $@.model
+	@echo "*****************************************************"
+	@echo "* testing low-rank interaction model (with dropout) *"
+	@echo "*****************************************************"
+	@echo
+	@${VW} --loss_function quantile -t -i $@.model 			\
+	  -d $(word 1,$+) -p						\
+	  >(perl -lane '$$s+=abs(($$F[0]-$$F[1])); } { 			\
+			1; print $$s/$$.;' > $@)
+
+.PHONY: all clean shootout
