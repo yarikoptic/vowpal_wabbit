@@ -3,8 +3,15 @@
 
 MANPAGES=vowpalwabbit/vw.1
 
-%:
+%: README
 	dh  $@ --buildsystem=make --with autoreconf
+
+README: README.md
+	fgrep -v "Status]" $< \
+      | markdown \
+      | html2text -style pretty -nobs \
+      | sed -e 's:&gt;:>:g' \
+      > $@
 
 %.1: %
 	help2man --no-info --name="Vowpal Wabbit -- fast online learning tool" ./$< > $@
@@ -42,6 +49,7 @@ override_dh_auto_test:
 
 override_dh_auto_clean:
 	dh_auto_clean
+	-rm -f README
 	-rm -f test/*.predict test/*.tmp depend $(MANPAGES)
 	: # And more garbage left with autoreconf
 	-rm -f vowpalwabbit/config.h vowpalwabbit/depend
