@@ -4,7 +4,7 @@
 MANPAGES=vowpalwabbit/vw.1
 
 %:
-	dh  $@  --with autoreconf
+	dh  $@ --buildsystem=make --with autoreconf
 
 %.1: %
 	help2man --no-info --name="Vowpal Wabbit -- fast online learning tool" ./$< > $@
