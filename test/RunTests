@@ -15,7 +15,7 @@ use File::Basename;
 
 use vars qw($opt_d $opt_D $opt_c $opt_e $opt_f
             $opt_E $opt_o $opt_w $opt_y $opt_t
-            $opt_v $opt_V);
+            $opt_v $opt_V $opt_O);
 
 my $Epsilon = 1e-4;
 
@@ -33,7 +33,7 @@ my $Valgrind = 'valgrind --quiet --error-exitcode=100 --track-origins=yes --leak
 
 # -- timeout is part of GNU coreutils, some systems may not have it
 my $TimeOut = '';
-my $TimeOutSec = 30;    # max allowed time for single vw command run
+my $TimeOutSec = 80;    # max allowed time for single vw command run
 
 # By default, we run all tests in the list
 my $FullRun = 1;
@@ -89,6 +89,7 @@ sub usage(@) {
         -V      apply valgrind to vw commands
         -t<T>   Apply timeout <T> (default $TimeOutSec) secs to individual tests
                 (will only work where GNU coreutils 'timeout' is present)
+        -O<O>   Add <O> option(s) to all vw commands
 
     [testno...]   Optional integer args: explicit test numbers (skip others)
 ";
@@ -137,7 +138,7 @@ sub valgrind_errfile($) {
 # which vw executable to test against
 #
 sub which_vw() {
-    if (@ARGV == 1 || @ARGV == 2) {
+    if (@ARGV > 0) {
         my $exe = $ARGV[0];
         if (-f $exe && -x $exe) {
             printf STDERR "Testing vw: %s\n", $exe;
@@ -157,31 +158,16 @@ sub which_vw() {
     usage("can't find a 'vw' executable to test on");
 }
 
-sub which_lda() {
-    if (@ARGV == 2) {
-        my $exe = $ARGV[1];
-        if (-f $exe && -x $exe) {
-            printf STDERR "Testing lda: %s\n", $exe;
-            return $exe;
-        } else {
-            usage("$0: argument $exe: not an executable file");
-        }
-    } elsif (@ARGV == 0 || @ARGV == 1) {
-        foreach my $dir (@PathAdd, split(':', $ENV{PATH})) {
-            my $exe = "$dir/vw";
-            if (-x $exe) {
-                printf STDERR "Testing lda: %s\n", $exe;
-                return $exe;
-            }
-        }
-    }
-    usage("can't find a 'lda' executable to test on");
-}
 
 sub init() {
     $0 =~ s{.*/}{};
-    getopts('wcdDefyE:ov:Vt:') || usage();
+    getopts('wcdDefyE:ov:Vt:O:') || usage();
     $opt_v = 0 unless (defined $opt_v and $opt_v);
+    if (defined $opt_O) {
+        $opt_O = " $opt_O";
+    } else {
+        $opt_O = '';
+    }
 
     my $hostname = `hostname`; chomp($hostname);
     printf STDERR "Testing on: hostname=%s OS=%s\n", $hostname, $^O;
@@ -333,7 +319,7 @@ sub next_test() {
 
     if ($cmd =~ /{VW}/) {
          $cmd = trim_spaces($cmd);
-         $cmd =~ s/{VW}/$VW/g;
+         $cmd =~ s/{VW}/$VW$opt_O/g;
     }
 
     unless (defined $cmd) {
@@ -835,17 +821,17 @@ exit $ErrorCount;
 __DATA__
 # Test 1:
 {VW} -k -l 20 --initial_t 128000 --power_t 1 -d train-sets/0001.dat \
-    -f models/0001.model -c --passes 8 --invariant \
+    -f models/0001_1.model -c --passes 8 --invariant \
     --ngram 3 --skips 1 --holdout_off
         train-sets/ref/0001.stderr
 
 # Test 2: checking predictions as well
-{VW} -k -t train-sets/0001.dat -i models/0001.model -p 0001.predict --invariant
+{VW} -k -t -d train-sets/0001.dat -i models/0001_1.model -p 0001.predict --invariant
     test-sets/ref/0001.stderr
     pred-sets/ref/0001.predict
 
 # Test 3: without -d, training only
-{VW} -k train-sets/0002.dat -f models/0002.model --invariant
+{VW} -k -d train-sets/0002.dat -f models/0002.model --invariant
     train-sets/ref/0002.stderr
 
 # Test 4: same, with -d
@@ -854,7 +840,7 @@ __DATA__
     train-sets/ref/0002.stderr
 
 # Test 5: add -q .., adaptive, and more (same input, different outputs)
-{VW} -k --initial_t 1 --adaptive --invariant -q Tf -q ff -f models/0002a.model train-sets/0002.dat
+{VW} -k --initial_t 1 --adaptive --invariant -q Tf -q ff -f models/0002a.model -d train-sets/0002.dat
     train-sets/ref/0002a.stderr
 
 # Test 6: run predictions on Test 4 model
@@ -864,7 +850,7 @@ __DATA__
     pred-sets/ref/0002b.predict
 
 # Test 7: using normalized adaptive updates and a low --power_t
-{VW} -k --power_t 0.45 -f models/0002c.model train-sets/0002.dat
+{VW} -k --power_t 0.45 -f models/0002c.model -d train-sets/0002.dat
     train-sets/ref/0002c.stderr
 
 # Test 8: predicts on test 7 model
@@ -883,11 +869,11 @@ __DATA__
     train-sets/ref/cs_test.ldf.wap.predict
 
 # Test 11: one-against-all
-{VW} -k --oaa 10 -c --passes 10 train-sets/multiclass --holdout_off
+{VW} -k --oaa 10 -c --passes 10 -d train-sets/multiclass --holdout_off
     train-sets/ref/oaa.stderr
 
 # Test 12: Error Correcting Tournament
-{VW} -k --ect 10 --error 3 -c --passes 10 --invariant train-sets/multiclass --holdout_off
+{VW} -k --ect 10 --error 3 -c --passes 10 --invariant -d train-sets/multiclass --holdout_off
     train-sets/ref/multiclass.stderr
 
 # Test 13: Run search (dagger) on wsj_small for 6 passes extra features
@@ -911,12 +897,12 @@ __DATA__
     train-sets/ref/zero.stderr
 
 # Test 16: LBFGS early termination
-{VW} -k -c -d train-sets/rcv1_small.dat --loss_function=logistic -b 20 --bfgs --mem 7 --passes 20 --termination 0.001 --l2 1.0 --holdout_off
+{VW} -k -c -d train-sets/rcv1_small.dat --loss_function=logistic --bfgs --mem 7 --passes 20 --termination 0.001 --l2 1.0 --holdout_off
     train-sets/ref/rcv1_small.stdout
     train-sets/ref/rcv1_small.stderr
 
 # Test 17: Run LDA with 100 topics on 1000 Wikipedia articles
-{VW} -k --lda 100 --lda_alpha 0.01 --lda_rho 0.01 --lda_D 1000 -l 1 -b 13 --minibatch 128 train-sets/wiki256.dat
+{VW} -k --lda 100 --lda_alpha 0.01 --lda_rho 0.01 --lda_D 1000 -l 1 -b 13 --minibatch 128 -d train-sets/wiki256.dat
     train-sets/ref/wiki1K.stderr
 
 # Test 18: Run search on seq_small for 12 passes, 4 passes per policy
@@ -928,12 +914,12 @@ __DATA__
     train-sets/ref/3parity.stderr
 
 # Test 20: neural network 3-parity with 2 hidden units (predict)
-{VW} -d train-sets/3parity --hash all -t -i models/0021.model -p 0022.predict
+{VW} -d train-sets/3parity -t -i models/0021.model -p 0022.predict
     pred-sets/ref/0022.stderr
     pred-sets/ref/0022.predict
 
 # Test 21: cubic features -- on a parity test case
-{VW} -k -c -f models/xxor.model train-sets/xxor.dat --cubic abc --passes 100 --holdout_off --progress 1.33333
+{VW} -k -c -f models/xxor.model -d train-sets/xxor.dat --cubic abc --passes 100 --holdout_off --progress 1.33333
     train-sets/ref/xxor.stderr
 
 # Test 22: matrix factorization -- training
@@ -950,7 +936,7 @@ __DATA__
     test-sets/ref/ml100k_small.stderr
 
 # Test 24: active-learning -- training
-{VW} -k --active --simulation --mellowness 0.000001 -d train-sets/rcv1_small.dat -l 10 --initial_t 10
+{VW} -k --active --simulation --mellowness 0.000001 -d train-sets/rcv1_small.dat -l 10 --initial_t 10 --random_seed 3
     train-sets/ref/active-simulation.t24.stderr
 
 # Test 25: bagging -- training regressor
@@ -1087,7 +1073,7 @@ __DATA__
 
 # Test 53: (holdout-broken regression)
 # ensure we have no holdout loss of '0 h'
-{VW} -k -c --passes 2 train-sets/0001.dat
+{VW} -k -c --passes 2 -d train-sets/0001.dat
     train-sets/ref/holdout-loss-not-zero.stderr
 
 # Test 54: stagewise poly with exponent 0.25
@@ -1123,7 +1109,7 @@ __DATA__
 
 # Test 60: empty test, bad builds (without make clean)
 # sometimes cause a SEGV even on empty input
-echo "" | {VW} 
+echo "" | {VW}
     train-sets/ref/empty-set.stderr
 
 # Test 61: daemon test
@@ -1164,7 +1150,7 @@ echo "" | {VW}
 
 # Test 68: Search for multiclass classification
 {VW} -k -c -d train-sets/multiclass.sch --passes 20 --search_task multiclasstask --search 10 --search_alpha 1e-4 --holdout_off
-	train-sets/ref/search_multiclass.stderr
+    train-sets/ref/search_multiclass.stderr
 
 # Test 69: (see Test 43/Test 44): search sequence labeling, with selective branching
 {VW} -d train-sets/sequence_data -t -i models/sequence_data.model -p sequence_data.nonldf.beam.test.predict --search_metatask selective_branching --search_max_branch 10 --search_kbest 10
@@ -1186,7 +1172,7 @@ echo "" | {VW}
     train-sets/ref/0001_ftrl.stderr
 
 # Test 73: test FTRL-Proximal
-{VW} -k -t train-sets/0001.dat -i models/0001_ftrl.model -p 0001_ftrl.predict
+{VW} -k -t -d train-sets/0001.dat -i models/0001_ftrl.model -p 0001_ftrl.predict
     test-sets/ref/0001_ftrl.stderr
     pred-sets/ref/0001_ftrl.predict
 
@@ -1195,23 +1181,23 @@ echo "" | {VW}
     train-sets/ref/rcv1_cb_eval.stderr
 
 # Test 75: Log_multi
-{VW} --log_multi 10 train-sets/multiclass
+{VW} --log_multi 10 -d train-sets/multiclass
     train-sets/ref/log_multi.stderr
 
 # Test 76: cbify, epsilon-greedy
-{VW} --cbify 10 --epsilon 0.05 train-sets/multiclass
+{VW} --cbify 10 --epsilon 0.05 -d train-sets/multiclass
     train-sets/ref/cbify_epsilon.stderr
 
 # Test 77: cbify, tau first
-{VW} --cbify 10 --first 5 train-sets/multiclass
+{VW} --cbify 10 --first 5 -d train-sets/multiclass
     train-sets/ref/cbify_first.stderr
 
 # Test 78: cbify, bag
-{VW} --cbify 10 --bag 7 train-sets/multiclass
+{VW} --cbify 10 --bag 7 -d train-sets/multiclass
     train-sets/ref/cbify_bag.stderr
 
 # Test 79: cbify, cover
-{VW} --cbify 10 --cover 3 train-sets/multiclass
+{VW} --cbify 10 --cover 3 -d train-sets/multiclass
     train-sets/ref/cbify_cover.stderr
 
 # Test 80: lrq empty namespace
@@ -1223,7 +1209,7 @@ echo "" | {VW}
     train-sets/ref/ftrl_pistol.stderr
 
 # Test 82: test FTRL-PiSTOL
-{VW} -k -t train-sets/0001.dat -i models/ftrl_pistol.model -p ftrl_pistol.predict
+{VW} -k -t -d train-sets/0001.dat -i models/ftrl_pistol.model -p ftrl_pistol.predict
     test-sets/ref/ftrl_pistol.stderr
     pred-sets/ref/ftrl_pistol.predict
 
@@ -1232,16 +1218,16 @@ echo "" | {VW}
     train-sets/ref/redefine.stderr
 
 # Test 84: check cb_adf
-{VW} --cb_adf train-sets/cb_test.ldf --noconstant
+{VW} --cb_adf -d train-sets/cb_test.ldf --noconstant
     train-sets/ref/cb_adf.stderr
 
 # Test 85: check multilabel_oaa
-{VW} --multilabel_oaa 10 train-sets/multilabel -p multilabel.predict
+{VW} --multilabel_oaa 10 -d train-sets/multilabel -p multilabel.predict
     train-sets/ref/multilabel.stderr
     pred-sets/ref/multilabel.predict
 
 # Test 86: check --csoaa_rank on csoaa_ldf
-{VW} --csoaa_ldf multiline --csoaa_rank train-sets/cs_test_multilabel.ldf -p multilabel_ldf.predict --noconstant
+{VW} --csoaa_ldf multiline --csoaa_rank -d train-sets/cs_test_multilabel.ldf -p multilabel_ldf.predict --noconstant
     train-sets/ref/multilabel_ldf.stderr
     pred-sets/ref/multilabel_ldf.predict
 
@@ -1284,7 +1270,7 @@ printf '3 |f a b c |e x y z\n2 |f a y c |e x\n' | \
 
 # Test 94: experience replay version of test 1
 {VW} -k -l 20 --initial_t 128000 --power_t 1 -d train-sets/0001.dat \
-    -f models/0001.model -c --passes 8 --invariant \
+    -c --passes 8 --invariant \
     --ngram 3 --skips 1 --holdout_off --replay_b 100
         train-sets/ref/0001-replay.stderr
 
@@ -1306,12 +1292,12 @@ printf '3 |f a b c |e x y z\n2 |f a y c |e x\n' | \
         train-sets/ref/0097.stderr
 
 # Test 98: checking predictions as well
-{VW} train-sets/0001.dat -i models/0097.model -p 0098.predict
+{VW} --preserve_performance_counters -d train-sets/0001.dat -i models/0097.model -p 0098.predict
     test-sets/ref/0098.stderr
     pred-sets/ref/0098.predict
 
 # Test 99: checking predictions with testing
-{VW} train-sets/0001.dat -i models/0097.model -p 0099.predict
+{VW} -d train-sets/0001.dat -i models/0097.model -p 0099.predict
     test-sets/ref/0099.stderr
     pred-sets/ref/0099.predict
 
@@ -1333,16 +1319,16 @@ printf '3 |f a b c |e x y z\n2 |f a y c |e x\n' | \
     train-sets/ref/active_cover_oracular.stderr
 
 # Test 104: check cb_adf
-{VW} --cb_adf train-sets/cb_test.ldf --cb_type mtr --noconstant
+{VW} --cb_adf -d train-sets/cb_test.ldf --cb_type mtr --noconstant
     train-sets/ref/cb_adf_mtr.stderr
 
 # Test 105: train FTRL-Proximal early stopping
-{VW} -k -d train-sets/0001.dat -f models/0001_ftrl.model --passes 10 --ftrl --ftrl_alpha 0.01 --ftrl_beta 0 --l1 2 --cache
+{VW} -k -d train-sets/0001.dat -f models/0001_ftrl.model --passes 10 --ftrl --ftrl_alpha 3.0 --ftrl_beta 0 --l1 0.9 --cache
     train-sets/ref/0001_ftrl_holdout.stderr
 
-# Test 106: test FTRL-Proximal early stopping
-{VW} -k -t train-sets/0001.dat -i models/0001_ftrl.model -p 0001_ftrl_holdout.predict
-    test-sets/ref/0001_ftrl_holdout.stderr
+# Test 106: test FTRL-Proximal early stopping prediction
+{VW} -k -t -d train-sets/0001.dat -i models/0001_ftrl.model -p 0001_ftrl_holdout.predict
+    test-sets/ref/0001_ftrl_holdout_106.stderr
     pred-sets/ref/0001_ftrl_holdout.predict
 
 # Test 107: train FTRL-Proximal no early stopping
@@ -1350,7 +1336,7 @@ printf '3 |f a b c |e x y z\n2 |f a y c |e x\n' | \
     train-sets/ref/0001_ftrl_holdout_off.stderr
 
 # Test 108: test FTRL-Proximal no early stopping
-{VW} -k -t train-sets/0001.dat -i models/0001_ftrl.model -p 0001_ftrl_holdout_off.predict --holdout_off
+{VW} -k -t -d train-sets/0001.dat -i models/0001_ftrl.model -p 0001_ftrl_holdout_off.predict --holdout_off
     test-sets/ref/0001_ftrl_holdout_off.stderr
     pred-sets/ref/0001_ftrl_holdout_off.predict
 
@@ -1365,17 +1351,253 @@ printf '3 |f a b c |e x y z\n2 |f a y c |e x\n' | \
    pred-sets/ref/csoaa_ldf_probabilities.predict
 
 # Test 111: Train a depenency parser with neural network and one_learner approach (lols)
-# use -b 30 to get better performnce
-{VW} -k -c -d train-sets/wsj_small.dparser.vw.gz -b 20 --passes 2 --search_task dep_parser --search 25 --search_alpha 1e-5 --search_rollin mix_per_roll --search_rollout oracle --holdout_off --one_learner --nn 5 --ftrl --search_history_length 3 --root_label 8
+{VW} -k -c -d train-sets/wsj_small.dparser.vw.gz -b 20 --search_task dep_parser --search 25 --search_alpha 1e-5 --search_rollin mix_per_roll --search_rollout oracle --one_learner --nn 5 --ftrl --search_history_length 3 --root_label 8
     train-sets/ref/search_dep_parser_one_learner.stderr
 
 # Test 112: Train a depenency parser with cost_to_go
-# use -b 30 to get better performnce
 {VW} -k -c -d train-sets/wsj_small.dparser.vw.gz -b 20 --passes 6 --search_task dep_parser --search 25 --search_alpha 1e-5 --search_rollin mix_per_roll --search_rollout none --holdout_off --search_history_length 3 --root_label 8 --cost_to_go
     train-sets/ref/search_dep_parser_cost_to_go.stderr
 
 # Test 113: Predictions with confidences
-# use -b 30 to get better performnce
-{VW} --confidence -d ./train-sets/rcv1_micro.dat -p confidence.preds
+{VW} --confidence -d ./train-sets/rcv1_micro.dat --initial_t 0.1 -p confidence.preds
     train-sets/ref/confidence.stderr
     pred-sets/ref/confidence.preds
+
+# Test 114: Over size example test
+{VW} -d train-sets/x.txt
+    train-sets/ref/oversize.stderr
+
+# Test 115: Long Line test
+{VW} -d train-sets/long_line -c -k
+    train-sets/ref/long_line.stderr
+
+# Test 116: MWT test
+{VW} -d train-sets/cb_eval --multiworld_test f -p cb_eval.preds
+    train-sets/ref/cb_eval.stderr
+    pred-sets/ref/cb_eval.preds
+
+# Test 117: Audit regressor of ftrl model (from test #107)
+{VW} -d train-sets/0001.dat -i models/0001_ftrl.model  --audit_regressor ftrl.audit_regr
+    train-sets/ref/ftrl_audit_regr.stderr
+    train-sets/ref/ftrl.audit_regr
+
+# Test 118: Audit regressor of csoaa model (from test #95)
+{VW} -d train-sets/test_named_csoaa -i models/test_named_csoaa.model --audit_regressor csoaa.audit_regr
+    train-sets/ref/csoaa_audit_regr.stderr
+    train-sets/ref/csoaa.audit_regr
+
+# Test 119: MWT learn test
+{VW} -d train-sets/cb_eval --multiworld_test f --learn 2 -p mwt_learn.preds
+    train-sets/ref/mwt_learn.stderr
+    pred-sets/ref/mwt_learn.preds
+
+# Test 120: MWT learn exclude test
+{VW} -d train-sets/cb_eval --multiworld_test f --learn 2 --exclude_eval -p mwt_learn_exclude.preds
+    train-sets/ref/mwt_learn_exclude.stderr
+    pred-sets/ref/mwt_learn_exclude.preds
+
+# Test 121: cb_explore
+{VW} -d train-sets/rcv1_raw_cb_small.vw --cb_explore 2 --ngram 2 --skips 4 -b 24 -l 0.25 -p rcv1_raw_cb_explore.preds
+    train-sets/ref/rcv1_raw_cb_explore.stderr
+    pred-sets/ref/rcv1_raw_cb_explore.preds
+
+# Test 122: Predictions with confidences after training
+{VW} --confidence --confidence_after_training --initial_t 0.1 -d ./train-sets/rcv1_small.dat -p confidence_after_training.preds
+    train-sets/ref/confidence_after_training.stderr
+    pred-sets/ref/confidence_after_training.preds
+
+# Test 123: cb_eval save/load #1
+{VW} -d train-sets/cb_eval1 --multiworld_test f -f mwt.model -p cb_eval1.preds
+    train-sets/ref/cb_eval1.stderr
+    pred-sets/ref/cb_eval1.preds
+
+# Test 124: cb_eval save/load #2
+{VW} -d train-sets/cb_eval2 -i mwt.model -p cb_eval2.preds
+    train-sets/ref/cb_eval2.stderr
+    pred-sets/ref/cb_eval2.preds
+
+# Test 125: arc-eager trasition-based dependency parser
+{VW} -k -c -d train-sets/wsj_small.dparser.vw.gz -b 20 --search_task dep_parser --search 26 --search_alpha 1e-5 --search_rollin mix_per_roll --search_rollout oracle --one_learner --search_history_length 3 --root_label 8 --transition_system 2 --passes 8
+    train-sets/ref/search_dep_parser_arceager.stderr
+
+# Test 126: recall tree hello world
+{VW} --quiet -d train-sets/gauss1k.dat.gz -f models/recall_tree_g100.model --recall_tree 100 -b 20 --loss_function logistic
+
+# Test 127: recall_tree hello world predict-from-saved-model
+{VW} -t -d train-sets/gauss1k.dat.gz -i models/recall_tree_g100.model
+    train-sets/ref/recall_tree_gauss1k.stderr
+    train-sets/ref/recall_tree_gauss1k.stdout
+
+# Test 128: cb_explore_adf with epsilon-greedy exploration
+{VW} --cb_explore_adf --epsilon 0.1 -d train-sets/cb_test.ldf --noconstant -p cbe_adf_epsilon.predict
+    train-sets/ref/cbe_adf_epsilon.stderr
+    pred-sets/ref/cbe_adf_epsilon.predict
+
+# Test 129: cb_explore_adf with softmax exploration
+{VW} --cb_explore_adf --softmax --lambda 1 -d train-sets/cb_test.ldf --noconstant -p cbe_adf_softmax.predict
+    train-sets/ref/cbe_adf_softmax.stderr
+    pred-sets/ref/cbe_adf_softmax.predict
+
+# Test 130: cb_explore_adf with bagging exploration
+{VW} --cb_explore_adf --bag 3 -d train-sets/cb_test.ldf --noconstant -p cbe_adf_bag.predict
+    train-sets/ref/cbe_adf_bag.stderr
+    pred-sets/ref/cbe_adf_bag.predict
+
+# Test 131: cb_explore_adf with explore-first exploration
+{VW} --cb_explore_adf --first 2 -d train-sets/cb_test.ldf --noconstant -p cbe_adf_first.predict
+    train-sets/ref/cbe_adf_first.stderr
+    pred-sets/ref/cbe_adf_first.predict
+
+# Test 132: train a poisson model
+{VW} --quiet -d train-sets/poisson.dat -f models/poisson.model --loss_function poisson --link poisson -b 2 -p poisson.train.predict
+    train-sets/ref/poisson.train.stderr
+    pred-sets/ref/poisson.train.predict
+
+# Test 133: train a poisson model without invariant updates
+{VW} --quiet -d train-sets/poisson.dat -f models/poisson.normalized.model --normalized --loss_function poisson --link poisson -b 2 -l 0.1 -p poisson.train.normalized.predict
+    train-sets/ref/poisson.train.normalized.stderr
+    pred-sets/ref/poisson.train.normalized.predict
+
+# Test 134: second order online learning
+{VW} --OjaNewton -d train-sets/0001.dat -f models/second_order.model -p second_order.predict
+    train-sets/ref/second_order.stderr
+    pred-sets/ref/second_order.predict
+
+# Test 135: cb explore adf
+{VW} -d train-sets/cb_adf_crash_1.data -f models/cb_adf_crash.model --cb_explore_adf --epsilon 0.05
+    train-sets/ref/cb_adf_crash1.stderr
+
+# Test 136: cb explore adf predict
+{VW} -d train-sets/cb_adf_crash_2.data -i models/cb_adf_crash.model -t
+    train-sets/ref/cb_adf_crash2.stderr
+
+# Test 137: Fix for regression introduced by badeedb.
+# Ensure audit output continues to work correctly in the presence of anon features.
+# Github issue 1038 (https://github.com/JohnLangford/vowpal_wabbit/issues/1038)
+{VW} --audit -d train-sets/audit.dat --noconstant
+    train-sets/ref/audit.stderr
+    train-sets/ref/audit.stdout
+
+# Test 138: cb_explore_adf with cover exploration
+{VW} --cb_explore_adf --cover 3 -d train-sets/cb_test.ldf --noconstant -p cbe_adf_cover.predict
+    train-sets/ref/cbe_adf_cover.stderr
+    pred-sets/ref/cbe_adf_cover.predict
+
+# Test 139: cb_explore_adf with cover exploration + double robust
+{VW} --cb_explore_adf --cover 3 --cb_type dr -d train-sets/cb_test.ldf --noconstant -p cbe_adf_cover_dr.predict
+    train-sets/ref/cbe_adf_cover_dr.stderr
+    pred-sets/ref/cbe_adf_cover_dr.predict
+
+# Test 140: marginal features
+{VW} --marginal f  -d train-sets/marginal_features --noconstant --initial_numerator 0.5 --initial_denominator 1.0 --decay 0.001 --holdout_off -c -k --passes 100 -f marginal_model
+    train-sets/ref/marginal.stderr
+
+# Test 141: marginal features test
+{VW} -i marginal_model  -d train-sets/marginal_features --noconstant -t
+    train-sets/ref/marginal_test.stderr
+
+# Test 142: Evaluate exploration on contextal bandit data
+{VW} --explore_eval --epsilon 0.2 -d train-sets/cb_test.ldf --noconstant -p explore_eval.predict
+    train-sets/ref/explore_eval.stderr
+    pred-sets/ref/explore_eval.predict
+
+# Test 143: Test 1 using JSON
+{VW} -k -l 20 --initial_t 128000 --power_t 1 -d train-sets/0001.json --json \
+    -c --passes 8 --invariant \
+    --ngram 3 --skips 1 --holdout_off
+        train-sets/ref/0001.json.stderr
+
+# Test 144: cb_explore_adf with cover exploration + double robust
+{VW} --cb_explore_adf --cover 3 --cb_type dr -d train-sets/cb_test.json --json --noconstant -p cbe_adf_cover_dr.predict
+    train-sets/ref/cbe_adf_cover_dr.json.stderr
+    pred-sets/ref/cbe_adf_cover_dr.predict
+
+# Test 145: mix labeled and unlabeled examples with --bootstrap bug:
+# https://github.com/JohnLangford/vowpal_wabbit/issues/1111
+{VW} --bootstrap 2 -d train-sets/labeled-unlabeled-mix.dat
+    train-sets/ref/labeled-unlabeled-mix.stderr
+
+# Test 146: cb_explore_adf with cover exploration + double robust (using more than 256 examples)
+{VW} --cb_explore_adf --cover 3 --cb_type dr -d train-sets/cb_test256.json --json --noconstant -p cbe_adf_cover_dr256.predict
+    train-sets/ref/cbe_adf_cover_dr256.json.stderr
+    pred-sets/ref/cbe_adf_cover_dr256.predict
+
+# Test 147: --scores --oaa
+{VW} -d train-sets/probabilities.dat --scores --oaa=4 -p oaa_scores.predict
+   train-sets/ref/oaa_scores.stderr
+   pred-sets/ref/oaa_scores.predict
+
+# Test 148:  check cb_adf with direct method option
+{VW} --cb_adf -d train-sets/cb_test.ldf -p cb_adf_dm.predict --cb_type dm
+    train-sets/ref/cb_adf_dm.stderr
+    pred-sets/ref/cb_adf_dm.predict
+
+# Test 149: initial_weight option is used
+echo "1 | feature:1" | {VW} -a --initial_weight 0.1 --initial_t 0.3
+    train-sets/ref/initial_weight.stderr
+    train-sets/ref/initial_weight.stdout
+
+# Test 150:  Test --sparse_weights with 148
+{VW} --cb_adf -d train-sets/cb_test.ldf -p cb_adf_dm.predict --cb_type dm --sparse_weights
+    train-sets/ref/sparse.stderr
+
+# Test 151: lrqfa
+{VW} --lrqfa aa3 -d train-sets/0080.dat
+    train-sets/ref/0151.stderr
+
+# Test 152: daemon on the foreground test
+./daemon-test.sh --foreground
+    test-sets/ref/vw-daemon.stdout
+
+# Test 153: marginal features
+{VW} --marginal f  -d train-sets/marginal_features --noconstant --initial_numerator 0.5 --initial_denominator 1.0 --decay 0.001 --holdout_off -c -k --passes 100  --compete
+    train-sets/ref/marginal_compete.stderr
+
+# Test 154: ignore linear
+{VW} -k --cache_file ignore_linear.cache --passes 10000 --holdout_off -d train-sets/0154.dat --noconstant --ignore_linear x -q xx
+    train-sets/ref/ignore_linear.stderr
+
+# Test 155: checking audit_regressor with --save_resume model
+{VW} -d train-sets/0001.dat -i models/0097.model --save_resume --audit_regressor 0097.audit_regr
+    train-sets/ref/0097.audit_regr.stderr
+    train-sets/ref/0097.audit_regr
+
+# Test 156: --cubic regression verification
+./cubic-test.sh ${VW}
+
+# Test 157: save_resume without --preserve_performce_counters does not alter performance counters over multiple passes
+{VW} -d train-sets/0001.dat -f models/sr.model  --passes 2 -c -k  -P 50 --save_resume
+    train-sets/ref/157.stderr
+
+# Test 158: test decision service json parsing
+{VW} -d train-sets/decisionservice.json --dsjson --cb_explore_adf --epsilon 0.2 --quadratic GT
+    train-sets/ref/decisionservice.stderr
+
+# Test 159: test --bootstrap & --binary interaction
+{VW} -d train-sets/rcv1_mini.dat --bootstrap 5 --binary -c -k --passes 2
+    train-sets/ref/bootstrap_and_binary.stderr
+
+# Test 160: test --bootstrap & --oaa interaction
+# (Also adds -q :: and -P1 to get & verify perfect predictions in 2nd pass)
+{VW} -d train-sets/multiclass --bootstrap 4 --oaa 10 -q :: --leave_duplicate_interactions  -c -k --passes 2 --holdout_off -P1
+    train-sets/ref/bootstrap_and_oaa.stderr
+
+# Test 161: --classweight
+{VW} -d train-sets/0001.dat --classweight 1:2,0:3.1,-1:5
+    train-sets/ref/classweight.stderr
+
+# Test 162: --classweight with multiclass
+{VW} --oaa 10 -d train-sets/multiclass --classweight 4:0,7:0.1,2:10,10:3
+    train-sets/ref/classweight_multiclass.stderr
+
+# Test 163: --classweight with multiclass
+{VW} --recall_tree 10 -d train-sets/multiclass --classweight 4:0,7:0.1,2:10,10:3
+    train-sets/ref/classweight_recall_tree.stderr
+
+# Test 164: cs_active low mellowness
+{VW} --cs_active 3 -d ../test/train-sets/cs_test --cost_max 2 --mellowness 0.01 --simulation --adax
+    train-sets/ref/cs_active_0.01.stderr
+
+# Test 165: cs_active high mellowness
+{VW} --cs_active 3 -d ../test/train-sets/cs_test --cost_max 2 --mellowness 1.0 --simulation --adax
+    train-sets/ref/cs_active_1.0.stderr
