@@ -64,7 +64,7 @@ Description: fast and scalable online machine learning algorithm - development f
 
 Package: vowpal-wabbit-dbg
 Section: debug
-Priority: extra
+Priority: optional
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}, vowpal-wabbit (= ${binary:Version})
 Description: fast and scalable online machine learning algorithm - debug files
