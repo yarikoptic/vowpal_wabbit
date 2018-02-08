@@ -34,18 +34,20 @@ namespace MURMUR_HASH_3
 // handle aligned reads, do the conversion here
 
 static inline uint32_t getblock(const uint32_t * p, int i)
-{ return p[i];
+{
+  return p[i];
 }
 
 }
 
 //-----------------------------------------------------------------------------
 
-uint32_t uniform_hash(const void * key, size_t len, uint32_t seed)
-{ const uint8_t * data = (const uint8_t*)key;
+uint64_t uniform_hash(const void * key, size_t len, uint64_t seed)
+{
+  const uint8_t * data = (const uint8_t*)key;
   const int nblocks = (int)len / 4;
 
-  uint32_t h1 = seed;
+  uint32_t h1 = (uint32_t)seed;
 
   const uint32_t c1 = 0xcc9e2d51;
   const uint32_t c2 = 0x1b873593;
@@ -54,7 +56,8 @@ uint32_t uniform_hash(const void * key, size_t len, uint32_t seed)
   const uint32_t * blocks = (const uint32_t *)(data + nblocks * 4);
 
   for (int i = -nblocks; i; i++)
-  { uint32_t k1 = MURMUR_HASH_3::getblock(blocks, i);
+  {
+    uint32_t k1 = MURMUR_HASH_3::getblock(blocks, i);
 
     k1 *= c1;
     k1 = ROTL32(k1, 15);
@@ -71,10 +74,11 @@ uint32_t uniform_hash(const void * key, size_t len, uint32_t seed)
   uint32_t k1 = 0;
 
   switch (len & 3)
-  { case 3: k1 ^= tail[2] << 16;
-    case 2: k1 ^= tail[1] << 8;
-    case 1: k1 ^= tail[0];
-      k1 *= c1; k1 = ROTL32(k1, 15); k1 *= c2; h1 ^= k1;
+  {
+  case 3: k1 ^= tail[2] << 16;
+  case 2: k1 ^= tail[1] << 8;
+  case 1: k1 ^= tail[0];
+    k1 *= c1; k1 = ROTL32(k1, 15); k1 *= c2; h1 ^= k1;
   }
 
   // --- finalization

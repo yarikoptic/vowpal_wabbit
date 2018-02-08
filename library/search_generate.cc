@@ -193,7 +193,7 @@ private:
   string  output_string;
   vector<char> A;
 
-inline size_t min3(size_t a, size_t b, size_t c) { return (a < b) ? (a < c) ? a : c : (b < c) ? b : c; }
+  inline size_t min3(size_t a, size_t b, size_t c) { return (a < b) ? (a < c) ? a : c : (b < c) ? b : c; }
 };
 
 struct input

@@ -8,6 +8,7 @@ license as described in the file LICENSE.
 #include <stdint.h>
 #include <math.h>
 #include "v_array.h"
+#include "floatbits.h"
 
 #ifdef _WIN32
 #include <WinSock2.h>
@@ -42,9 +43,16 @@ inline void print_substring(substring s)
 { std::cout.write(s.begin,s.end - s.begin);
 }
 
-size_t hashstring (substring s, uint32_t h);
+// can't type as it forces C++/CLI part to include rapidjson, which leads to name clashes...
+struct example;
+namespace VW
+{
+typedef example& (*example_factory_t)(void*);
+}
 
-typedef size_t (*hash_func_t)(substring, uint32_t);
+uint64_t hashstring (substring s, uint64_t h);
+
+typedef uint64_t (*hash_func_t)(substring, uint64_t);
 
 hash_func_t getHasher(const std::string& s);
 
@@ -102,8 +110,8 @@ inline float parseFloat(char * p, char **end)
     return (float)strtod(start,end);
 }
 
-inline bool nanpattern( float value ) { return ((*(uint32_t*)&value) & 0x7fC00000) == 0x7fC00000; }
-inline bool infpattern( float value ) { return ((*(uint32_t*)&value) & 0x7fC00000) == 0x7f800000; }
+inline bool nanpattern( float value ) { return (float_to_bits(value) & 0x7fC00000) == 0x7fC00000; }
+inline bool infpattern( float value ) { return (float_to_bits(value) & 0x7fC00000) == 0x7f800000; }
 
 inline float float_of_substring(substring s)
 { char* endptr = s.end;

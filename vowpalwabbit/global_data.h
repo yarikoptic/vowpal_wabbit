@@ -1,3 +1,4 @@
+
 /*
 Copyright (c) by respective owners including Yahoo!, Microsoft, and
 individual contributors. All rights reserved.  Released under a BSD
@@ -15,6 +16,7 @@ license as described in the file LICENSE.
 namespace po = boost::program_options;
 
 #include "v_array.h"
+#include "array_parameters.h"
 #include "parse_primitives.h"
 #include "loss_functions.h"
 #include "comp_io.h"
@@ -24,6 +26,7 @@ namespace po = boost::program_options;
 #include "v_hashmap.h"
 #include <time.h>
 #include "hash.h"
+#include "crossplat_compat.h"
 
 struct version_struct
 { int major;
@@ -99,12 +102,17 @@ struct version_struct
   }
   std::string to_string() const
   { char v_str[128];
-    std::sprintf(v_str,"%d.%d.%d",major,minor,rev);
+    sprintf_s(v_str,sizeof(v_str),"%d.%d.%d",major,minor,rev);
     std::string s = v_str;
     return s;
   }
   void from_string(const char* str)
-  { std::sscanf(str,"%d.%d.%d",&major,&minor,&rev);
+  {
+#ifdef _WIN32
+    sscanf_s(str, "%d.%d.%d", &major, &minor, &rev);
+#else
+    std::sscanf(str,"%d.%d.%d",&major,&minor,&rev);
+#endif
   }
 };
 
@@ -112,20 +120,15 @@ const version_struct version(PACKAGE_VERSION);
 
 typedef float weight;
 
-struct regressor
-{ weight* weight_vector;
-  size_t weight_mask; // (stride*(1 << num_bits) -1)
-  uint32_t stride_shift;
-};
+typedef v_hashmap< substring, features* > feature_dict;
 
-typedef v_hashmap< substring, v_array<feature>* > feature_dict;
 struct dictionary_info
 { char* name;
   unsigned long long file_hash;
   feature_dict* dict;
 };
 
-inline void deleter(substring ss, uint32_t label)
+inline void deleter(substring ss, uint64_t label)
 { free_it(ss.begin); }
 
 class namedlabels
@@ -133,15 +136,15 @@ class namedlabels
 private:
 
   v_array<substring> id2name;
-  v_hashmap<substring,uint32_t> name2id;
+  v_hashmap<substring,uint64_t> name2id;
   uint32_t K;
 
 public:
 
-  namedlabels(string label_list)
+  namedlabels(std::string label_list)
   { id2name = v_init<substring>();
     char* temp = calloc_or_throw<char>(1+label_list.length());
-    strncpy(temp, label_list.c_str(), strlen(label_list.c_str()));
+    memcpy(temp, label_list.c_str(), strlen(label_list.c_str()));
     substring ss = { temp, nullptr };
     ss.end = ss.begin + label_list.length();
     tokenize(',', ss, id2name);
@@ -151,9 +154,9 @@ public:
     name2id.init(4 * K + 1, 0, substring_equal);
     for (size_t k=0; k<K; k++)
     { substring& l = id2name[k];
-      size_t hash = uniform_hash((unsigned char*)l.begin, l.end-l.begin, 378401);
-      uint32_t id = name2id.get(l, hash);
-      if (id != 0)
+      uint64_t hash = uniform_hash((unsigned char*)l.begin, l.end-l.begin, 378401);
+      uint64_t id = name2id.get(l, hash);
+      if (id != 0) // TODO: memory leak: char* temp
         THROW("error: label dictionary initialized with multiple occurances of: " << l);
       size_t len = l.end - l.begin;
       substring l_copy = { calloc_or_throw<char>(len), nullptr };
@@ -166,7 +169,6 @@ public:
   ~namedlabels()
   { if (id2name.size()>0)
       free(id2name[0].begin);
-    cout << "in namedlabels delete" << endl;
     name2id.iter(deleter);
     name2id.delete_v();
     id2name.delete_v();
@@ -174,13 +176,13 @@ public:
 
   uint32_t getK() { return K; }
 
-  uint32_t get(substring& s)
-  { size_t hash = uniform_hash((unsigned char*)s.begin, s.end-s.begin, 378401);
-    uint32_t v  =  name2id.get(s, hash);
+  uint64_t get(substring& s)
+  { uint64_t hash = uniform_hash((unsigned char*)s.begin, s.end-s.begin, 378401);
+    uint64_t v  =  name2id.get(s, hash);
     if (v == 0)
-    { cerr << "warning: missing named label '";
-      for (char*c = s.begin; c != s.end; c++) cerr << *c;
-      cerr << '\'' << endl;
+    { std::cerr << "warning: missing named label '";
+      for (char*c = s.begin; c != s.end; c++) std::cerr << *c;
+      std::cerr << '\'' << std::endl;
     }
     return v;
   }
@@ -202,9 +204,9 @@ struct shared_data
   uint64_t total_features;
 
   double t;
-  double weighted_examples;
+  double weighted_labeled_examples;
+  double old_weighted_labeled_examples;
   double weighted_unlabeled_examples;
-  double old_weighted_examples;
   double weighted_labels;
   double sum_loss;
   double sum_loss_since_last_dump;
@@ -231,6 +233,10 @@ struct shared_data
   double multiclass_log_loss;
   double holdout_multiclass_log_loss;
 
+  bool  is_more_than_two_labels_observed;
+  float first_observed_label;
+  float second_observed_label;
+
   // Column width, precision constants:
   static const int col_avg_loss = 8;
   static const int prec_avg_loss = 6;
@@ -245,8 +251,12 @@ struct shared_data
   static const int prec_current_predict = 4;
   static const int col_current_features = 8;
 
-  void update(bool test_example, float loss, float weight, size_t num_features)
-  { if(test_example)
+  double weighted_examples()
+  {return weighted_labeled_examples + weighted_unlabeled_examples;}
+
+  void update(bool test_example, bool labeled_example, float loss, float weight, size_t num_features)
+  { t += weight;
+    if(test_example)
     { weighted_holdout_examples += weight;//test weight seen
       weighted_holdout_examples_since_last_dump += weight;
       weighted_holdout_examples_since_last_pass += weight;
@@ -255,21 +265,25 @@ struct shared_data
       holdout_sum_loss_since_last_pass += loss;//since last pass
     }
     else
-    { weighted_examples += weight;
-      sum_loss += loss;
-      sum_loss_since_last_dump += loss;
-      total_features += num_features;
-      example_number++;
-    }
+      {
+	if (labeled_example)
+	  weighted_labeled_examples += weight;
+	else
+	  weighted_unlabeled_examples += weight;
+	sum_loss += loss;
+	sum_loss_since_last_dump += loss;
+	total_features += num_features;
+	example_number++;
+      }
   }
 
   inline void update_dump_interval(bool progress_add, float progress_arg)
   { sum_loss_since_last_dump = 0.0;
-    old_weighted_examples = weighted_examples;
+    old_weighted_labeled_examples = weighted_labeled_examples;
     if (progress_add)
-      dump_interval = (float)weighted_examples + progress_arg;
+      dump_interval = (float)weighted_examples() + progress_arg;
     else
-      dump_interval = (float)weighted_examples * progress_arg;
+      dump_interval = (float)weighted_examples() * progress_arg;
   }
 
   void print_update(bool holdout_set_off, size_t current_pass, float label, float prediction,
@@ -350,17 +364,23 @@ struct shared_data
       holding_out = true;
     }
     else
-    { std::cerr << std::setw(col_avg_loss) << std::setprecision(prec_avg_loss) << std::right << std::fixed
-                << (sum_loss / weighted_examples)
-                << " "
-                << std::setw(col_since_last) << std::setprecision(prec_avg_loss) << std::right << std::fixed
-                << (sum_loss_since_last_dump / (weighted_examples - old_weighted_examples));
+      {
+	std::cerr << std::setw(col_avg_loss) << std::setprecision(prec_avg_loss) << std::right << std::fixed;
+	if (weighted_labeled_examples > 0.)
+	  std::cerr << (sum_loss / weighted_labeled_examples);
+	else
+	  std::cerr << "n.a.";
+	std::cerr << " "
+		  << std::setw(col_since_last) << std::setprecision(prec_avg_loss) << std::right << std::fixed;
+	if (weighted_labeled_examples == old_weighted_labeled_examples)
+	  std::cerr << "n.a.";
+	else
+	  std::cerr << (sum_loss_since_last_dump / (weighted_labeled_examples - old_weighted_labeled_examples));
     }
-
     std::cerr << " "
               << std::setw(col_example_counter) << std::right << example_number
               << " "
-              << std::setw(col_example_weight) << std::setprecision(prec_example_weight) << std::right << weighted_examples
+              << std::setw(col_example_weight) << std::setprecision(prec_example_weight) << std::right << weighted_examples()
               << " "
               << std::setw(col_current_label) << std::right << label
               << " "
@@ -383,12 +403,47 @@ struct shared_data
 };
 
 enum AllReduceType
-{
-  Socket,
+{ Socket,
   Thread
 };
 
 class AllReduce;
+
+// avoid name clash
+namespace label_type
+{ enum label_type_t
+{ simple,
+  cb, // contextual-bandit
+  cb_eval, // contextual-bandit evaluation
+  cs, // cost-sensitive
+  multi,
+  mc
+};
+}
+
+typedef void(*trace_message_t)(void *context, const std::string&);
+
+// TODO: change to virtual class
+
+// invoke trace_listener when << endl is encountered.
+class vw_ostream : public std::ostream
+{
+	class vw_streambuf : public std::stringbuf
+	{
+		vw_ostream& parent;
+	public:
+		vw_streambuf(vw_ostream& str);
+
+		virtual int sync();
+	};
+	vw_streambuf buf;
+
+public:
+	vw_ostream();
+
+	void* trace_context;
+	trace_message_t trace_listener;
+};
 
 struct vw
 { shared_data* sd;
@@ -410,12 +465,12 @@ struct vw
 
   void (*set_minmax)(shared_data* sd, float label);
 
-  size_t current_pass;
+  uint64_t current_pass;
 
   uint32_t num_bits; // log_2 of the number of features.
   bool default_bits;
 
-  string data_filename; // was vm["data"]
+  std::string data_filename; // was vm["data"]
 
   bool daemon;
   size_t num_children;
@@ -428,6 +483,9 @@ struct vw
   bool hessian_on;
 
   bool save_resume;
+  bool preserve_performance_counters;
+  std::string id;
+
   version_struct model_file_ver;
   double normalized_sum_norm_x;
   bool vw_is_main;  // true if vw is executable; false in library mode
@@ -436,7 +494,7 @@ struct vw
   po::options_description* new_opts;
   po::variables_map vm;
   std::stringstream* file_options;
-  vector<std::string> args;
+  std::vector<std::string> args;
 
   void* /*Search::search*/ searchstr;
 
@@ -450,19 +508,22 @@ struct vw
 
   float l1_lambda; //the level of l_1 regularization to impose.
   float l2_lambda; //the level of l_2 regularization to impose.
+  bool no_bias;    //no bias in regularization
   float power_t;//the power on learning rate decay.
   int reg_mode;
 
   size_t pass_length;
   size_t numpasses;
   size_t passes_complete;
-  size_t parse_mask; // 1 << num_bits -1
+  uint64_t parse_mask; // 1 << num_bits -1
   bool permutations; // if true - permutations of features generated instead of simple combinations. false by default
   v_array<v_string> interactions; // interactions of namespaces to cross.
   std::vector<std::string> pairs; // pairs of features to cross.
   std::vector<std::string> triples; // triples of features to cross.
   bool ignore_some;
   bool ignore[256];//a set of namespaces to ignore
+  bool ignore_some_linear;
+  bool ignore_linear[256];//a set of namespaces to ignore for linear
 
   bool redefine_some;          // --redefine param was used
   unsigned char redefine[256]; // keeps new chars for amespaces
@@ -473,23 +534,25 @@ struct vw
   uint32_t skips[256];//skips in ngrams.
   std::vector<std::string> limit_strings; // descriptor of feature limits
   uint32_t limit[256];//count to limit features by
-  uint32_t affix_features[256]; // affixes to generate (up to 8 per namespace)
+  uint64_t affix_features[256]; // affixes to generate (up to 16 per namespace - 4 bits per affix)
   bool     spelling_features[256]; // generate spelling features for which namespace
-  vector<string> dictionary_path;  // where to look for dictionaries
-  vector<feature_dict*> namespace_dictionaries[256]; // each namespace has a list of dictionaries attached to it
-  vector<dictionary_info> loaded_dictionaries; // which dictionaries have we loaded from a file to memory?
+  std::vector<std::string> dictionary_path;  // where to look for dictionaries
+  std::vector<feature_dict*> namespace_dictionaries[256]; // each namespace has a list of dictionaries attached to it
+  std::vector<dictionary_info> loaded_dictionaries; // which dictionaries have we loaded from a file to memory?
 
-  bool multilabel_prediction;
-  bool audit;//should I print lots of debugging information?
+  void(*delete_prediction)(void*); bool audit; //should I print lots of debugging information?
   bool quiet;//Should I suppress progress-printing of updates?
   bool training;//Should I train if lable data is available?
   bool active;
   bool adaptive;//Should I use adaptive individual learning rates?
   bool normalized_updates; //Should every feature be normalized
   bool invariant_updates; //Should we use importance aware/safe updates
-  size_t random_seed;
+  uint64_t random_seed;
+  uint64_t random_state; // per instance random_state
   bool random_weights;
   bool random_positive_weights; // for initialize_regressor w/ new_mf
+  bool normal_weights;
+  bool tnormal_weights;
   bool add_constant;
   bool nonormalize;
   bool do_reset_source;
@@ -515,7 +578,7 @@ struct vw
   int raw_prediction; // file descriptors for text output.
 
   void (*print)(int,float,float,v_array<char>);
-  void (*print_text)(int, string, v_array<char>);
+  void (*print_text)(int, std::string, v_array<char>);
   loss_function* loss;
 
   char* program_name;
@@ -529,7 +592,8 @@ struct vw
   time_t init_time;
 
   std::string final_regressor_name;
-  regressor reg;
+
+  parameters weights;
 
   size_t max_examples; // for TLC
 
@@ -540,20 +604,24 @@ struct vw
   bool  progress_add;   // additive (rather than multiplicative) progress dumps
   float progress_arg;   // next update progress dump multiplier
 
-  bool seeded; // whether the instance is sharing model state with others
-
   std::map< std::string, size_t> name_index_map;
 
+  label_type::label_type_t label_type;
+
+  vw_ostream trace_message;
+
   vw();
+
+  // ostream doesn't have copy constructor and the python library used some boost code which code potentially invoke this
+  vw(const vw &);
 };
 
 void print_result(int f, float res, float weight, v_array<char> tag);
 void binary_print_result(int f, float res, float weight, v_array<char> tag);
 void noop_mm(shared_data*, float label);
-void print_lda_result(vw& all, int f, float* res, float weight, v_array<char> tag);
 void get_prediction(int sock, float& res, float& weight);
-void compile_gram(vector<string> grams, uint32_t* dest, char* descriptor, bool quiet);
-void compile_limits(vector<string> limits, uint32_t* dest, bool quiet);
+void compile_gram(std::vector<std::string> grams, uint32_t* dest, char* descriptor, bool quiet);
+void compile_limits(std::vector<std::string> limits, uint32_t* dest, bool quiet);
 int print_tag(std::stringstream& ss, v_array<char> tag);
 void add_options(vw& all, po::options_description& opts);
 inline po::options_description_easy_init new_options(vw& all, std::string name = "\0")

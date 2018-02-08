@@ -12,9 +12,22 @@ license as described in the file LICENSE.
 #include "multiclass.h"
 #include "simple_label.h"
 #include "parser.h"
-using namespace std;
 
-void return_simple_example(vw& all, void*, example& ec);
+namespace prediction_type
+{
+enum prediction_type_t
+{ scalar,
+  scalars,
+  action_scores,
+  action_probs,
+  multiclass,
+  multilabels,
+  prob,
+  multiclassprobs
+};
+
+const char* to_string(prediction_type_t prediction_type);
+}
 
 namespace LEARNER
 {
@@ -44,6 +57,11 @@ struct learn_data
   void (*multipredict_f)(void* data, base_learner& base, example&, size_t count, size_t step, polyprediction*pred, bool finalize_predictions);
 };
 
+struct sensitivity_data
+{ void* data;
+  float (*sensitivity_f)(void* data, base_learner& base, example&);
+};
+
 struct save_load_data
 { void* data;
   base_learner* base;
@@ -61,17 +79,22 @@ void generic_driver(std::vector<vw*> alls);
 
 inline void noop_sl(void*, io_buf&, bool, bool) {}
 inline void noop(void*) {}
+inline float noop_sensitivity(void*, base_learner&, example&) { return 0.; }
 
 typedef void (*tlearn)(void* d, base_learner& base, example& ec);
+typedef float (*tsensitivity)(void* d, base_learner& base, example& ec);
 typedef void (*tmultipredict)(void* d, base_learner& base, example& ec, size_t, size_t, polyprediction*, bool);
 typedef void (*tsl)(void* d, io_buf& io, bool read, bool text);
 typedef void (*tfunc)(void*d);
 typedef void (*tend_example)(vw& all, void* d, example& ec);
 
-template<class T> learner<T>& init_learner(T*, void (*)(T&, base_learner&, example&), size_t);
+template<class T> learner<T>& init_learner(T*, void (*)(T&, base_learner&, example&), size_t, prediction_type::prediction_type_t pred = prediction_type::scalar);
+template<class T>
+learner<T>& init_learner(T*, base_learner*, void(*learn)(T&, base_learner&, example&),
+                         void(*predict)(T&, base_learner&, example&), size_t ws = 1);
 template<class T>
 learner<T>& init_learner(T*, base_learner*, void (*learn)(T&, base_learner&, example&),
-                         void (*predict)(T&, base_learner&, example&), size_t ws = 1);
+                         void (*predict)(T&, base_learner&, example&), size_t ws, prediction_type::prediction_type_t);
 
 template<class T>
 struct learner
@@ -79,6 +102,7 @@ struct learner
 private:
   func_data init_fd;
   learn_data learn_fd;
+  sensitivity_data sensitivity_fd;
   finish_example_data finish_example_fd;
   save_load_data save_load_fd;
   func_data end_pass_fd;
@@ -86,6 +110,7 @@ private:
   func_data finisher_fd;
 
 public:
+  prediction_type::prediction_type_t pred_type;
   size_t weights; //this stores the number of "weight vectors" required by the learner.
   size_t increment;
 
@@ -129,6 +154,18 @@ public:
   }
   inline void set_update(void (*u)(T& data, base_learner& base, example&))
   { learn_fd.update_f = (tlearn)u; }
+
+  //used for active learning and confidence to determine how easily predictions are changed
+  inline void set_sensitivity(float (*u)(T& data, base_learner& base, example&))
+  { sensitivity_fd.data = learn_fd.data;
+    sensitivity_fd.sensitivity_f = (tsensitivity)u;
+  }
+  inline float sensitivity(example& ec, size_t i=0)
+  { ec.ft_offset += (uint32_t)(increment*i);
+    float ret = sensitivity_fd.sensitivity_f(sensitivity_fd.data, *learn_fd.base, ec);
+    ec.ft_offset -= (uint32_t)(increment*i);
+    return ret;
+  }
 
   //called anytime saving or loading needs to happen. Autorecursive.
   inline void save_load(io_buf& io, bool read, bool text)
@@ -181,14 +218,17 @@ public:
     finish_example_fd.finish_example_f = (tend_example)f;
   }
 
-  friend learner<T>& init_learner<>(T*, void (*learn)(T&, base_learner&, example&), size_t);
+  friend learner<T>& init_learner<>(T*, base_learner*, void(*l)(T&, base_learner&, example&),
+                                    void(*pred)(T&, base_learner&, example&), size_t);
+
+  friend learner<T>& init_learner<>(T*, void (*learn)(T&, base_learner&, example&), size_t, prediction_type::prediction_type_t);
   friend learner<T>& init_learner<>(T*, base_learner*, void (*l)(T&, base_learner&, example&),
-                                    void (*pred)(T&, base_learner&, example&), size_t);
+                                    void (*pred)(T&, base_learner&, example&), size_t, prediction_type::prediction_type_t);
 };
 
 template<class T>
 learner<T>& init_learner(T* dat, void (*learn)(T&, base_learner&, example&),
-                         size_t params_per_weight)
+                         size_t params_per_weight, prediction_type::prediction_type_t pred_type)
 { // the constructor for all learning algorithms.
   learner<T>& ret = calloc_or_throw<learner<T> >();
   ret.weights = 1;
@@ -205,16 +245,26 @@ learner<T>& init_learner(T* dat, void (*learn)(T&, base_learner&, example&),
   ret.learn_fd.update_f = (tlearn)learn;
   ret.learn_fd.predict_f = (tlearn)learn;
   ret.learn_fd.multipredict_f = nullptr;
+  ret.sensitivity_fd.sensitivity_f = (tsensitivity)noop_sensitivity;
   ret.finish_example_fd.data = dat;
   ret.finish_example_fd.finish_example_f = return_simple_example;
+  ret.pred_type = pred_type;
 
   return ret;
 }
 
 template<class T>
 learner<T>& init_learner(T* dat, base_learner* base,
+                         void(*learn)(T&, base_learner&, example&),
+                         void(*predict)(T&, base_learner&, example&), size_t ws)
+{ return init_learner<T>(dat, base, learn, predict, ws, base->pred_type);
+}
+
+template<class T>
+learner<T>& init_learner(T* dat, base_learner* base,
                          void (*learn)(T&, base_learner&, example&),
-                         void (*predict)(T&, base_learner&, example&), size_t ws)
+                         void (*predict)(T&, base_learner&, example&), size_t ws,
+                         prediction_type::prediction_type_t pred_type)
 { //the reduction constructor, with separate learn and predict functions
   learner<T>& ret = calloc_or_throw<learner<T> >();
   ret = *(learner<T>*)base;
@@ -229,6 +279,7 @@ learner<T>& init_learner(T* dat, base_learner* base,
   ret.finisher_fd.data = dat;
   ret.finisher_fd.base = base;
   ret.finisher_fd.func = noop;
+  ret.pred_type = pred_type;
 
   ret.weights = ws;
   ret.increment = base->increment * ret.weights;
@@ -238,8 +289,9 @@ learner<T>& init_learner(T* dat, base_learner* base,
 template<class T> learner<T>&
 init_multiclass_learner(T* dat, base_learner* base,
                         void (*learn)(T&, base_learner&, example&),
-                        void (*predict)(T&, base_learner&, example&), parser* p, size_t ws)
-{ learner<T>& l = init_learner(dat,base,learn,predict,ws);
+                        void (*predict)(T&, base_learner&, example&), parser* p, size_t ws,
+                        prediction_type::prediction_type_t pred_type = prediction_type::multiclass)
+{ learner<T>& l = init_learner(dat,base,learn,predict,ws,pred_type);
   l.set_finish_example(MULTICLASS::finish_example<T>);
   p->lp = MULTICLASS::mc_label;
   return l;

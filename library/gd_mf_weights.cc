@@ -58,8 +58,7 @@ int main(int argc, char *argv[])
   // global model params
   unsigned char left_ns = model->pairs[0][0];
   unsigned char right_ns = model->pairs[0][1];
-  weight* weights = model->reg.weight_vector;
-  size_t mask = model->reg.weight_mask;
+  dense_parameters& weights = model->weights.dense_weights;
 
   // const char *filename = argv[0];
   FILE* file = fopen(infile.c_str(), "r");
@@ -81,37 +80,34 @@ int main(int argc, char *argv[])
     ec = VW::read_example(*model, line);
 
     // write out features for left namespace
-    if (ec->audit_features[left_ns].begin != ec->audit_features[left_ns].end)
-    { for (audit_data *f = ec->audit_features[left_ns].begin; f != ec->audit_features[left_ns].end; f++)
-      { left_linear << f->feature << '\t' << weights[f->weight_index & mask];
+    features& left = ec->feature_space[left_ns];
+    for (size_t i = 0; i < left.size(); ++i)
+    { left_linear << left.space_names[i].get()->second << '\t' << weights[left.indicies[i]];
 
-        left_quadratic << f->feature;
-        for (size_t k = 1; k <= rank; k++)
-          left_quadratic << '\t' << weights[(f->weight_index + k) & mask];
-      }
-      left_linear << endl;
-      left_quadratic << endl;
+      left_quadratic << left.space_names[i].get()->second;
+      for (size_t k = 1; k <= rank; k++)
+        left_quadratic << '\t' << weights[(left.indicies[i] + k)];
     }
+    left_linear << endl;
+    left_quadratic << endl;
 
     // write out features for right namespace
-    if (ec->audit_features[right_ns].begin != ec->audit_features[right_ns].end)
-    { for (audit_data *f = ec->audit_features[right_ns].begin; f != ec->audit_features[right_ns].end; f++)
-      { right_linear << f->feature << '\t' << weights[f->weight_index & mask];
+    features& right = ec->feature_space[right_ns];
+    for (size_t i = 0; i < right.size(); ++i)
+    { right_linear << right.space_names[i].get()->second << '\t' << weights[left.indicies[i]];
 
-        right_quadratic << f->feature;
-        for (size_t k = 1; k <= rank; k++)
-          right_quadratic << '\t' << weights[(f->weight_index + k + rank) & mask];
-      }
-      right_linear << endl;
-      right_quadratic << endl;
+      right_quadratic << right.space_names[i].get()->second;
+      for (size_t k = 1; k <= rank; k++)
+        right_quadratic << '\t' << weights[(left.indicies[i] + k + rank)];
     }
+    right_linear << endl;
+    right_quadratic << endl;
 
     VW::finish_example(*model, ec);
   }
 
   // write constant
-  feature* f = ec->atomics[constant_namespace].begin;
-  constant << weights[f->weight_index & mask] << endl;
+  constant << weights[ec->feature_space[constant_namespace].indicies[0]] << endl;
 
   // clean up
   VW::finish(*model);

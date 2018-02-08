@@ -3,14 +3,12 @@
 #include "../vowpalwabbit/parser.h"
 #include "../vowpalwabbit/vw.h"
 
-using namespace std;
 typedef uint32_t fid;
 
 struct vw_namespace
 { char namespace_letter;
 public: vw_namespace(const char c) : namespace_letter(c) {}
 };
-
 
 class ezexample
 {
@@ -22,7 +20,7 @@ private:
   char str[2];
   example*ec;
   bool we_create_ec;
-  vector<fid> past_seeds;
+  std::vector<fid> past_seeds;
   fid current_seed;
   size_t quadratic_features_num;
   float quadratic_features_sqr;
@@ -41,20 +39,16 @@ private:
     new_ec->tag.erase();
     new_ec->indices.erase();
     for (size_t i=0; i<256; i++)
-    { new_ec->atomics[i].erase();
-      new_ec->audit_features[i].erase();
-      new_ec->sum_feat_sq[i] = 0.;
-    }
+      new_ec->feature_space[i].erase();
+
     new_ec->ft_offset = 0;
     new_ec->num_features = 0;
     new_ec->partial_prediction = 0.;
     new_ec->updated_prediction = 0.;
-    new_ec->topic_predictions.erase();
     new_ec->passthrough = nullptr;
     new_ec->loss = 0.;
-    new_ec->example_t = 0.;
     new_ec->total_sum_feat_sq = 0.;
-    new_ec->revert_weight = 0.;
+    new_ec->confidence = 0.;
     return new_ec;
   }
 
@@ -109,10 +103,8 @@ public:
     ec = this_ec;
     we_create_ec = false;
 
-    for (unsigned char*i=ec->indices.begin; i != ec->indices.end; ++i)
-    { current_ns = *i;
-      ns_exists[(int)current_ns] = true;
-    }
+    for (auto ns : ec->indices)
+      ns_exists[ns] = true;
     if (current_ns != 0)
     { str[0] = current_ns;
       current_seed = VW::hash_space(*vw_ref, str);
@@ -122,11 +114,11 @@ public:
   ~ezexample()   // calls finish_example *only* if we created our own example!
   { if (ec->in_use && VW::is_ring_example(*vw_par_ref, ec))
       VW::finish_example(*vw_par_ref, ec);
-    for (example**ecc=example_copies.begin; ecc!=example_copies.end; ecc++)
-      if ((*ecc)->in_use && VW::is_ring_example(*vw_par_ref, ec))
-        VW::finish_example(*vw_par_ref, *ecc);
+    for (auto ecc : example_copies)
+      if (ecc->in_use && VW::is_ring_example(*vw_par_ref, ec))
+        VW::finish_example(*vw_par_ref, ecc);
     example_copies.erase();
-    free(example_copies.begin);
+    free(example_copies.begin());
   }
 
   bool ensure_ns_exists(char c)    // returns TRUE iff we should ignore it :)
@@ -140,8 +132,7 @@ public:
   void addns(char c)
   { if (ensure_ns_exists(c)) return;
 
-    ec->atomics[(int)c].erase();
-    ec->sum_feat_sq[(int)c] = 0;
+    ec->feature_space[(int)c].erase();
     past_seeds.push_back(current_seed);
     current_ns = c;
     str[0] = c;
@@ -155,10 +146,9 @@ public:
     }
     else
     { if (ns_exists[(int)current_ns])
-      { ec->total_sum_feat_sq -= ec->sum_feat_sq[(int)current_ns];
-        ec->sum_feat_sq[(int)current_ns] = 0;
-        ec->num_features -= ec->atomics[(int)current_ns].size();
-        ec->atomics[(int)current_ns].erase();
+      { ec->total_sum_feat_sq -= ec->feature_space[(int)current_ns].sum_feat_sq;
+        ec->feature_space[(int)current_ns].erase();
+        ec->num_features -= ec->feature_space[(int)current_ns].size();
 
         ns_exists[(int)current_ns] = false;
       }
@@ -175,9 +165,7 @@ public:
   { if (to_ns == 0) return 0;
     if (ensure_ns_exists(to_ns)) return 0;
 
-    feature f = { v, fint << vw_ref->reg.stride_shift };
-    ec->atomics[(int)to_ns].push_back(f);
-    ec->sum_feat_sq[(int)to_ns] += v * v;
+    ec->feature_space[(int)to_ns].push_back(v, fint << vw_ref->weights.stride_shift());
     ec->total_sum_feat_sq += v * v;
     ec->num_features++;
     example_changed_since_prediction = true;
@@ -189,12 +177,11 @@ public:
   // copy an entire namespace from this other example, you can even give it a new namespace name if you want!
   void add_other_example_ns(example& other, char other_ns, char to_ns)
   { if (ensure_ns_exists(to_ns)) return;
-    for (feature*f = other.atomics[(int)other_ns].begin; f != other.atomics[(int)other_ns].end; ++f)
-    { ec->atomics[(int)to_ns].push_back(*f);
-      ec->sum_feat_sq[(int)to_ns] += f->x * f->x;
-      ec->total_sum_feat_sq += f->x * f->x;
-      ec->num_features++;
-    }
+    features& fs = other.feature_space[(int)other_ns];
+    for (size_t i = 0; i < fs.size(); i++)
+      ec->feature_space[(int)to_ns].push_back(fs.values[i], fs.indicies[i]);
+    ec->total_sum_feat_sq += fs.sum_feat_sq;
+    ec->num_features += fs.size();
     example_changed_since_prediction = true;
   }
   void add_other_example_ns(example& other, char ns)    // default to_ns to other_ns
@@ -204,7 +191,7 @@ public:
   void add_other_example_ns(ezexample& other, char other_ns, char to_ns) { add_other_example_ns(*other.ec, other_ns, to_ns); }
   void add_other_example_ns(ezexample& other, char ns                  ) { add_other_example_ns(*other.ec, ns); }
 
-  inline ezexample& set_label(string label)
+  inline ezexample& set_label(std::string label)
   { VW::parse_example_label(*vw_par_ref, *ec, label);
     example_changed_since_prediction = true;
     return *this;
@@ -212,8 +199,7 @@ public:
 
   void mini_setup_example()
   { ec->partial_prediction = 0.;
-    vw_ref->sd->t += vw_par_ref->p->lp.get_weight(&ec->l);
-    ec->example_t = (float)vw_ref->sd->t;
+    ec->weight = vw_par_ref->p->lp.get_weight(&ec->l);
 
     ec->num_features      -= quadratic_features_num;
     ec->total_sum_feat_sq -= quadratic_features_sqr;
@@ -221,13 +207,11 @@ public:
     quadratic_features_num = 0;
     quadratic_features_sqr = 0.;
 
-    for (vector<string>::iterator i = vw_ref->pairs.begin(); i != vw_ref->pairs.end(); i++)
+    for (std::vector<std::string>::iterator i = vw_ref->pairs.begin(); i != vw_ref->pairs.end(); i++)
     { quadratic_features_num
-      += (ec->atomics[(int)(*i)[0]].end - ec->atomics[(int)(*i)[0]].begin)
-         *  (ec->atomics[(int)(*i)[1]].end - ec->atomics[(int)(*i)[1]].begin);
+      += ec->feature_space[(int)(*i)[0]].size() * ec->feature_space[(int)(*i)[1]].size();
       quadratic_features_sqr
-      += ec->sum_feat_sq[(int)(*i)[0]]
-         *  ec->sum_feat_sq[(int)(*i)[1]];
+      += ec->feature_space[(int)(*i)[0]].sum_feat_sq * ec->feature_space[(int)(*i)[1]].sum_feat_sq;
     }
     ec->num_features      += quadratic_features_num;
     ec->total_sum_feat_sq += quadratic_features_sqr;
@@ -282,9 +266,9 @@ public:
   { static example* empty_example = is_multiline ? VW::read_example(*vw_par_ref, (char*)"") : nullptr;
     if (is_multiline)
     { vw_ref->learn(empty_example);
-      for (example**ecc=example_copies.begin; ecc!=example_copies.end; ecc++)
-        if ((*ecc)->in_use)
-          VW::finish_example(*vw_par_ref, *ecc);
+      for (auto ecc : example_copies)
+        if (ecc->in_use)
+          VW::finish_example(*vw_par_ref, ecc);
       example_copies.erase();
     }
   }
@@ -292,33 +276,33 @@ public:
 
   // HELPER FUNCTIONALITY
 
-  inline fid hash(string fstr)         { return VW::hash_feature(*vw_ref, fstr, current_seed); }
+  inline fid hash(std::string fstr)         { return VW::hash_feature(*vw_ref, fstr, current_seed); }
   inline fid hash(char*  fstr)         { return VW::hash_feature_cstr(*vw_ref, fstr, current_seed); }
-  inline fid hash(char c, string fstr) { str[0] = c; return VW::hash_feature(*vw_ref, fstr, VW::hash_space(*vw_ref, str)); }
+  inline fid hash(char c, std::string fstr) { str[0] = c; return VW::hash_feature(*vw_ref, fstr, VW::hash_space(*vw_ref, str)); }
   inline fid hash(char c, char*  fstr) { str[0] = c; return VW::hash_feature_cstr(*vw_ref, fstr, VW::hash_space(*vw_ref, str)); }
 
   inline fid addf(fid    fint           ) { return addf(fint      , 1.0); }
-  inline fid addf(string fstr, float val) { return addf(hash(fstr), val); }
-  inline fid addf(string fstr           ) { return addf(hash(fstr), 1.0); }
+  inline fid addf(std::string fstr, float val) { return addf(hash(fstr), val); }
+  inline fid addf(std::string fstr           ) { return addf(hash(fstr), 1.0); }
 
   inline fid addf(char ns, fid    fint           ) { return addf(ns, fint          , 1.0); }
-  inline fid addf(char ns, string fstr, float val) { return addf(ns, hash(ns, fstr), val); }
-  inline fid addf(char ns, string fstr           ) { return addf(ns, hash(ns, fstr), 1.0); }
+  inline fid addf(char ns, std::string fstr, float val) { return addf(ns, hash(ns, fstr), val); }
+  inline fid addf(char ns, std::string fstr           ) { return addf(ns, hash(ns, fstr), 1.0); }
 
   inline ezexample& operator()(const vw_namespace&n) { addns(n.namespace_letter); return *this; }
 
   inline ezexample& operator()(fid         fint           ) { addf(fint, 1.0); return *this; }
-  inline ezexample& operator()(string      fstr           ) { addf(fstr, 1.0); return *this; }
+  inline ezexample& operator()(std::string      fstr           ) { addf(fstr, 1.0); return *this; }
   inline ezexample& operator()(const char* fstr           ) { addf(fstr, 1.0); return *this; }
   inline ezexample& operator()(fid         fint, float val) { addf(fint, val); return *this; }
-  inline ezexample& operator()(string      fstr, float val) { addf(fstr, val); return *this; }
+  inline ezexample& operator()(std::string      fstr, float val) { addf(fstr, val); return *this; }
   inline ezexample& operator()(const char* fstr, float val) { addf(fstr, val); return *this; }
 
   inline ezexample& operator()(char ns, fid         fint           ) { addf(ns, fint, 1.0); return *this; }
-  inline ezexample& operator()(char ns, string      fstr           ) { addf(ns, fstr, 1.0); return *this; }
+  inline ezexample& operator()(char ns, std::string      fstr           ) { addf(ns, fstr, 1.0); return *this; }
   inline ezexample& operator()(char ns, const char* fstr           ) { addf(ns, fstr, 1.0); return *this; }
   inline ezexample& operator()(char ns, fid         fint, float val) { addf(ns, fint, val); return *this; }
-  inline ezexample& operator()(char ns, string      fstr, float val) { addf(ns, fstr, val); return *this; }
+  inline ezexample& operator()(char ns, std::string      fstr, float val) { addf(ns, fstr, val); return *this; }
   inline ezexample& operator()(char ns, const char* fstr, float val) { addf(ns, fstr, val); return *this; }
 
   inline ezexample& operator()(  example&other, char other_ns, char to_ns) { add_other_example_ns(other, other_ns, to_ns); return *this; }

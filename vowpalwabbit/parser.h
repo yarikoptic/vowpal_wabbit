@@ -19,7 +19,7 @@ struct parser
   v_array<substring> name;
 
   io_buf* input; //Input source(s)
-  int (*reader)(void*, example* ae);
+  int (*reader)(vw*, v_array<example*>& examples);
   hash_func_t hasher;
   bool resettable; //Whether or not the input can be reset.
   io_buf* output; //Where to output the cache.
@@ -54,6 +54,10 @@ struct parser
   v_array<substring> parse_name;
 
   label_parser lp;  // moved from vw
+
+  bool audit;
+  bool decision_service_json;
+  void* jsonp;//either a json_parser<true> or a json_parser<false>
 };
 
 parser* new_parser();
@@ -68,9 +72,7 @@ void release_parser_datastructures(vw& all);
 void adjust_used_index(vw& all);
 
 //parser control
-
 void make_example_available();
-bool parser_done(parser* p);
 void set_done(vw& all);
 
 //source control functions

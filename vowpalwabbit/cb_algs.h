@@ -4,11 +4,21 @@ individual contributors. All rights reserved.  Released under a BSD
 license as described in the file LICENSE.
  */
 #pragma once
+
+#include "baseline.h"
+
 //TODO: extend to handle CSOAA_LDF and WAP_LDF
 LEARNER::base_learner* cb_algs_setup(vw& all);
 
+#define CB_TYPE_DR 0
+#define CB_TYPE_DM 1
+#define CB_TYPE_IPS 2
+#define CB_TYPE_MTR 3
+
 namespace CB_ALGS
 {
+
+
 template <bool is_learn>
 float get_cost_pred(LEARNER::base_learner* scorer, CB::cb_class* known_cost, example& ec, uint32_t index, uint32_t base)
 { CB::label ld = ec.l.cb;
@@ -20,18 +30,21 @@ float get_cost_pred(LEARNER::base_learner* scorer, CB::cb_class* known_cost, exa
   else
     simple_temp.label = FLT_MAX;
 
+  const bool baseline_enabled_old = BASELINE::baseline_enabled(&ec);
+  BASELINE::set_baseline_enabled(&ec);
   ec.l.simple = simple_temp;
   polyprediction p = ec.pred;
-
-  if (is_learn && simple_temp.label != FLT_MAX)
+  if (is_learn && known_cost != nullptr && index == known_cost->action)
   { float old_weight = ec.weight;
-    ec.weight = 1.f;
+    ec.weight /= known_cost->probability;
     scorer->learn(ec, index-1+base);
     ec.weight = old_weight;
   }
   else
     scorer->predict(ec, index-1+base);
 
+  if (!baseline_enabled_old)
+    BASELINE::reset_baseline_disabled(&ec);
   float pred = ec.pred.scalar;
   ec.pred = p;
 
@@ -40,8 +53,22 @@ float get_cost_pred(LEARNER::base_learner* scorer, CB::cb_class* known_cost, exa
   return pred;
 }
 
-
+inline float get_unbiased_cost(CB::cb_class* observation, uint32_t action, float offset = 0.)
+{ if (action == observation->action)
+    return (observation->cost - offset) / observation->probability;
+  return 0.;
 }
 
-float get_unbiased_cost(CB::cb_class* known_cost, COST_SENSITIVE::label& cb_label, uint32_t action);
+inline float get_unbiased_cost(CB::cb_class* observation, COST_SENSITIVE::label& scores, uint32_t action)
+{ for (auto& cl : scores.costs)
+    if (cl.class_index == action)
+      return get_unbiased_cost(observation, action, cl.x) + cl.x;
+  return get_unbiased_cost(observation, action);
+}
+
+inline bool example_is_newline_not_header(example& ec)
+{ return (example_is_newline(ec) && !CB::ec_is_example_header(ec)); }
+}
+
+
 
