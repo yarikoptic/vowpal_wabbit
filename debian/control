@@ -8,6 +8,8 @@ Build-Depends: debhelper (>= 9),
 			   libboost-python-dev,
 			   rapidjson-dev,
                help2man,
+               markdown,
+               html2text,
                zlib1g-dev,
 			   markdown, html2text,
 Standards-Version: 4.1.3
