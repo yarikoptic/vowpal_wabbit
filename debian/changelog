@@ -1,7 +1,10 @@
-vowpal-wabbit (8.5.0.dfsg1-2) UNRELEASED; urgency=medium
+vowpal-wabbit (8.5.0.dfsg1-2) unstable; urgency=medium
 
   * debian/control
     - add missing markdown and html2text used for README.md generation
+  * debian/rules
+    - force -msse -mfpmath=sse to provide consistent arithmetics between
+      32 and 64 bit x86
 
  -- Yaroslav Halchenko <debian@onerussian.com>  Sun, 11 Feb 2018 15:19:14 -0500
 
