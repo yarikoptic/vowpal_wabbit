@@ -2,6 +2,8 @@ vowpal-wabbit (8.5.0.dfsg1-2) UNRELEASED; urgency=medium
 
   * debian/control
     - add missing markdown and html2text used for README.md generation
+  * debian/rules
+    - provide OPTIM_FLAGS ?= -DNDEBUG -O3 -fomit-frame-pointer -fno-strict-aliasing -msse2 -mfpmath=sse 
 
  -- Yaroslav Halchenko <debian@onerussian.com>  Sun, 11 Feb 2018 15:19:14 -0500
 

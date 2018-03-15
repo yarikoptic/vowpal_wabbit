@@ -23,7 +23,7 @@ override_dh_auto_configure:
       --with-boost-libdir=/usr/lib/$(DEB_HOST_MULTIARCH)
 
 override_dh_auto_build:
-	dh_auto_build
+	dh_auto_build -- OPTIM_FLAGS="-DNDEBUG -O3 -fomit-frame-pointer -fno-strict-aliasing -msse2 -mfpmath=sse"
 	debian/rules $(MANPAGES)
 
 override_dh_auto_install:
