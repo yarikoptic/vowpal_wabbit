@@ -1,9 +1,10 @@
 vowpal-wabbit (8.5.0.dfsg1-3) unstable; urgency=medium
 
   * debian/rules
-    - pass the sse settings only for i386 and via DEB_CXXFLAGS_MAINT_APPEND
+    - pass the sse settings only for amd64 and i386 and via 
+      DEB_C*FLAGS_MAINT_APPEND (Closes: #893031)
 
- -- Yaroslav Halchenko <debian@onerussian.com>  Thu, 15 Mar 2018 13:50:41 -0400
+ -- Yaroslav Halchenko <debian@onerussian.com>  Thu, 15 Mar 2018 16:24:56 -0400
 
 vowpal-wabbit (8.5.0.dfsg1-2) unstable; urgency=medium
 
