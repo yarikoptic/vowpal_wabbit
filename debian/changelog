@@ -1,3 +1,10 @@
+vowpal-wabbit (8.5.0.dfsg1-3) unstable; urgency=medium
+
+  * debian/rules
+    - pass the mmx/sse settings only for amd64 and i386 (Closes: #893031)
+
+ -- Yaroslav Halchenko <debian@onerussian.com>  Fri, 16 Mar 2018 15:06:24 -0400
+
 vowpal-wabbit (8.5.0.dfsg1-2) unstable; urgency=medium
 
   * debian/control

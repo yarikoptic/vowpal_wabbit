@@ -3,6 +3,11 @@
 
 MANPAGES=vowpalwabbit/vw.1
 DEB_HOST_MULTIARCH ?= $(shell dpkg-architecture -qDEB_HOST_MULTIARCH)
+DEB_HOST_ARCH_CPU ?= $(shell dpkg-architecture -qDEB_HOST_ARCH_CPU)
+
+ifneq ($(filter $(DEB_HOST_ARCH_CPU),amd64 i386),)
+OPTS=CXXFLAGS="-mmmx -msse -msse2 -mfpmath=sse"
+endif
 
 
 %: README
@@ -21,8 +26,7 @@ README: README.md
 override_dh_auto_configure:
 	dh_auto_configure -- \
       $(shell dpkg-buildflags --export=configure) \
-      --with-boost-libdir=/usr/lib/$(DEB_HOST_MULTIARCH) \
-      CXXFLAGS="-mmmx -msse -msse2 -mfpmath=sse"
+      --with-boost-libdir=/usr/lib/$(DEB_HOST_MULTIARCH) $(OPTS)
 
 override_dh_auto_build:
 	dh_auto_build
