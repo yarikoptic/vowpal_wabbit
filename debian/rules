@@ -3,10 +3,11 @@
 
 MANPAGES=vowpalwabbit/vw.1
 DEB_HOST_MULTIARCH ?= $(shell dpkg-architecture -qDEB_HOST_MULTIARCH)
+DEB_HOST_ARCH_CPU ?= $(shell dpkg-architecture -qDEB_HOST_ARCH_CPU)
 
 ifneq ($(filter $(DEB_HOST_ARCH_CPU),amd64 i386),)
-	export DEB_CXXFLAGS_MAINT_APPEND = -msse -msse2 -mfpmath=sse
-	export DEB_CFLAGS_MAINT_APPEND = -msse -msse2 -mfpmath=sse
+        export DEB_CXXFLAGS_MAINT_APPEND = -mmmx -msse -msse2 -mfpmath=sse
+        export DEB_CFLAGS_MAINT_APPEND = -mmmx -msse -msse2 -mfpmath=sse
 endif
 
 
