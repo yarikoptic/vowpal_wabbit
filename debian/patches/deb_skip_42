@@ -1,0 +1,14 @@
+--- a/test/RunTests
++++ b/test/RunTests
+@@ -1016,8 +1016,9 @@ __DATA__
+     train-sets/ref/rcv1_raw_cb_dm.stderr
+ 
+ # Test 42: --lda --passes 2 hang regression
+-{VW} -k -d train-sets/lda-2pass-hang.dat --lda 10 -c --passes 2 --holdout_off
+-    train-sets/ref/lda-2pass-hang.stderr
++# Disabled temporarily: https://github.com/JohnLangford/vowpal_wabbit/issues/1553
++#{VW} -k -d train-sets/lda-2pass-hang.dat --lda 10 -c --passes 2 --holdout_off
++#    train-sets/ref/lda-2pass-hang.stderr
+ 
+ # Test 43: search sequence labeling, non-ldf train
+ {VW} -k -c -d train-sets/sequence_data --passes 20 --invariant --search_rollout ref --search_alpha 1e-8 --search_task sequence --search 5 --holdout_off -f models/sequence_data.model
