@@ -26,9 +26,9 @@ size_t read_features(vw* all, char*& line, size_t& num_chars)
     line += 3;
     num_chars -= 3;
   }
-  if (line[num_chars-1] == '\n')
+  if (num_chars>0 && line[num_chars-1] == '\n')
     num_chars--;
-  if (line[num_chars-1] == '\r')
+  if (num_chars>0 && line[num_chars-1] == '\r')
     num_chars--;
   return num_chars_initial;
 }
@@ -69,6 +69,7 @@ public:
   uint64_t* affix_features;
   bool* spelling_features;
   v_array<char> spelling;
+  uint32_t hash_seed;
 
   vector<feature_dict*>* namespace_dictionaries;
 
@@ -90,7 +91,7 @@ public:
       // featureValue --> ':' 'Float'
       ++reading_head;
       char *end_read = nullptr;
-      v = parseFloat(reading_head,&end_read);
+      v = parseFloat(reading_head, &end_read, endLine);
       if(end_read == reading_head)
       {
         parserWarning("malformed example! Float expected after : \"", beginLine, reading_head, "\"");
@@ -189,7 +190,7 @@ public:
         if (spell_fs.size() == 0)
           ae->indices.push_back(spelling_namespace);
         //v_array<char> spelling;
-        spelling.erase();
+        spelling.clear();
         for (char*c = feature_name.begin; c!=feature_name.end; ++c)
         {
           char d = 0;
@@ -298,14 +299,14 @@ public:
           free(base);
         base = base_v_array.begin();
       }
-      channel_hash = p->hasher(name, hash_base);
+      channel_hash = p->hasher(name, this->hash_seed);
       nameSpaceInfoValue();
     }
   }
 
   inline void listFeatures()
   {
-    while(*reading_head == ' ' || *reading_head == '\t')
+    while((*reading_head == ' ' || *reading_head == '\t') && (reading_head < endLine))
     {
       //listFeatures --> ' ' MaybeFeature ListFeatures
       ++reading_head;
@@ -338,7 +339,7 @@ public:
         base[0] = ' ';
         base[1] = '\0';
       }
-      channel_hash = 0;
+      channel_hash = this->hash_seed == 0 ? 0 : uniform_hash("", 0, this->hash_seed);
       listFeatures();
     }
     else if(*reading_head != ':')
@@ -358,7 +359,7 @@ public:
 
   inline void listNameSpace()
   {
-    while(*reading_head == '|')   // ListNameSpace --> '|' NameSpace ListNameSpace
+    while((*reading_head == '|') && (reading_head < endLine))   // ListNameSpace --> '|' NameSpace ListNameSpace
     {
       ++reading_head;
       nameSpace();
@@ -386,6 +387,7 @@ public:
       this->spelling_features = all.spelling_features;
       this->namespace_dictionaries = all.namespace_dictionaries;
       this->base = nullptr;
+      this->hash_seed = all.hash_seed;
       listNameSpace();
       if (base != nullptr)
         free(base);
@@ -411,7 +413,7 @@ void substring_to_example(vw* all, example* ae, substring example)
 
   if (*example.begin == '|')
   {
-    all->p->words.erase();
+    all->p->words.clear();
   }
   else
   {
