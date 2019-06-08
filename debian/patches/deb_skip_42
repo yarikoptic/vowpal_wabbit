@@ -1,6 +1,6 @@
 --- a/test/RunTests
 +++ b/test/RunTests
-@@ -1016,8 +1016,9 @@ __DATA__
+@@ -1024,8 +1024,9 @@ __DATA__
      train-sets/ref/rcv1_raw_cb_dm.stderr
  
  # Test 42: --lda --passes 2 hang regression
