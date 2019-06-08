@@ -1,170 +1,147 @@
 # -*- coding: utf-8 -*-
 """ Vowpal Wabbit python setup module """
 
+import distutils.dir_util
+import os
 import platform
-import re
-import subprocess
 import sys
-import sysconfig
 from codecs import open
-from ctypes.util import find_library
 from distutils.command.clean import clean as _clean
-from os import environ, makedirs, path, remove, walk
-from setuptools import setup, Extension, find_packages
+from setuptools import setup, Extension, find_packages, Distribution as _distribution
 from setuptools.command.build_ext import build_ext as _build_ext
 from setuptools.command.sdist import sdist as _sdist
 from setuptools.command.test import test as _test
 from setuptools.command.install_lib import install_lib as _install_lib
-from shutil import copy, copytree, rmtree
-
+from shutil import rmtree
 
 system = platform.system()
 version_info = sys.version_info
-here = path.abspath(path.dirname(__file__))
-pylibvw = Extension('pylibvw', sources=['python/pylibvw.cc'])
+here = os.path.abspath(os.path.dirname(__file__))
 
+class Distribution(_distribution):
+    if system == 'Windows':
+        global_options = _distribution.global_options + [
+            ('vcpkg-root=', None, 'Path to vcpkg root. For Windows only.'),
+        ]
 
-def find_boost():
-    """ Find correct boost-python library information """
-    # find_library() has a tricky platform-dependent search behaviour
-    # it is not easy to instruct it to do search in a particular location on Linux at least
-    # skip find_library checks if python comes from conda 
-    # rely on conda to set up libboost_python.so link to what has been actually installed
+    def __init__(self, attrs=None):
+        self.vcpkg_root = None
+        _distribution.__init__(self, attrs)
+        
+class CMakeExtension(Extension):
+    def __init__(self, name):
+        # don't invoke the original build_ext for this special extension
+        Extension.__init__(self, name, sources=[])
+        
+def get_ext_filename_without_platform_suffix(filename):
+    from distutils.sysconfig import get_config_var
+    ext_suffix = get_config_var('EXT_SUFFIX')
+    name, ext = os.path.splitext(filename)
 
-    prefix = 'boost_python'
-    if environ.get('CONDA_PREFIX') is not None:
-        environ['DYLD_LIBRARY_PATH'] = sysconfig.get_config_var('LIBDIR')
-        options = ['']
-    elif system == 'Linux':
-        options = ['-py{v[0]}{v[1]}'.format(v=version_info),
-                   '-py{v[0]}'.format(v=version_info),
-                   '{v[0]}'.format(v=version_info),
-                   '']
-    elif system == 'Darwin':
-        options = ['{v[0]}{v[1]}-mt'.format(v=version_info),
-                   '{v[0]}-mt'.format(v=version_info),
-                   '{v[0]}{v[1]}'.format(v=version_info),
-                   '{v[0]}'.format(v=version_info),
-                   '-mt',
-                   '']
-    elif system == 'Cygwin':
-        options = ['{v[0]}-mt'.format(v=version_info),
-                   '-mt']
+    if not ext_suffix:
+        return filename
+
+    if ext_suffix == ext:
+        return filename
+
+    ext_suffix = ext_suffix.replace(ext, '')
+    idx = name.find(ext_suffix)
+
+    if idx == -1:
+        return filename
     else:
-        raise Exception('Building on this system is not currently supported')
+        return name[:idx] + ext
 
-    for option in options:
-        boost_lib = '{pre}{opt}'.format(pre=prefix, opt=option)
-        if find_library(boost_lib):
-            break
-    else:
-        raise Exception('Could not find boost python library')
+class BuildPyLibVWBindingsModule(_build_ext):
+    def get_ext_filename(self, ext_name):
+        # don't append the extension suffix to the binary name
+        # see https://stackoverflow.com/questions/38523941/change-cythons-naming-rules-for-so-files/40193040#40193040
+        filename = _build_ext.get_ext_filename(self, ext_name)
+        return get_ext_filename_without_platform_suffix(filename)
 
-    return boost_lib
+    def run(self):
+        for ext in self.extensions:
+            self.build_cmake(ext)
 
+        _build_ext.run(self)
 
-def prep():
-    """ Prepare source directories for building extension """
+    def build_cmake(self, ext):
+        # Make build directory
+        distutils.dir_util.mkpath(self.build_temp)
 
-    # helper function to exclude subdirectories during copytree calls
-    def exclude_dirs(cur_dir, _):
-        return next(walk(cur_dir))[1]
+        # Ensure lib output directory is made
+        lib_output_dir = os.path.join(here, os.path.dirname(self.get_ext_fullpath(ext.name)))
+        distutils.dir_util.mkpath(lib_output_dir)
 
-    # don't create src folder if it already exists
-    if not path.exists(path.join(here, 'src')):
-        # add main directory (exclude children to avoid recursion)
-        copytree(path.join(here, '..'), path.join(here, 'src'), ignore=exclude_dirs)
+        # example of cmake args
+        config = 'Debug' if self.debug else 'Release'
+    
+        cmake_args = [
+            '-DCMAKE_BUILD_TYPE=' + config,
+            '-DPY_VERSION=' + '{v[0]}.{v[1]}'.format(v=version_info),
+            '-DBUILD_PYTHON=On',
+            '-DWARNINGS=Off'
+        ]
+        # example of build args
+        build_args = [
+            '--config', config
+        ]
 
-        # add python directory (exclude children to avoid recursion)
-        copytree(path.join(here), path.join(here, 'src', 'python'), ignore=exclude_dirs)
-        subprocess.check_call(['make', 'clean'], cwd=path.join(here, 'src', 'python'))
+        if system == 'Windows':
+            cmake_args += [
+                '-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG=' + str(lib_output_dir),
+                '-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE=' + str(lib_output_dir),
+                '-G', "Visual Studio 14 2015 Win64"
+            ]
+            build_args += [
+                '--target', 'pylibvw'
+            ]
 
-        # add explore
-        copytree(path.join(here, '..', 'rapidjson'), path.join(here, 'src', 'rapidjson'))
-        copytree(path.join(here, '..', 'explore'), path.join(here, 'src', 'explore'))
+            if self.distribution.vcpkg_root is not None:
+                # add the vcpkg toolchain if its provided
+                abs_vcpkg_path = os.path.abspath(self.distribution.vcpkg_root)
+                vcpkg_toolchain = os.path.join(
+                    abs_vcpkg_path,
+                    'scripts',
+                    'buildsystems',
+                    'vcpkg.cmake'
+                )
+                cmake_args +=  ['-DCMAKE_TOOLCHAIN_FILE=' + vcpkg_toolchain]
 
-        # add folders necessary to run 'make python'
-        for folder in ['library', 'vowpalwabbit']:
-            copytree(path.join(here, '..', folder), path.join(here, 'src', folder))
-            subprocess.check_call(['make', 'clean'], cwd=path.join(here, 'src', folder))
+        else:
+            cmake_args += [
+                '-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=' + str(lib_output_dir),
+            ]
+            build_args += [
+                '--', '-j8',
+                # Build the pylibvw target
+                "pylibvw"
+            ]
+
+        cmake_directory = os.path.join(here, '..')
+        os.chdir(str(self.build_temp))
+        self.spawn(['cmake', str(cmake_directory)] + cmake_args)
+        if not self.dry_run:
+            self.spawn(['cmake', '--build', '.'] + build_args)
+        os.chdir(str(here))
 
 
 class Clean(_clean):
     """ Clean up after building python package directories """
     def run(self):
-        try:
-            remove(path.join(here, '.coverage'))
-        except OSError:
-            pass
-
-        rmtree(path.join(here, '.cache'), ignore_errors=True)
-        rmtree(path.join(here, '.tox'), ignore_errors=True)
-        rmtree(path.join(here, 'src'), ignore_errors=True)
-        rmtree(path.join(here, 'dist'), ignore_errors=True)
-        rmtree(path.join(here, 'build'), ignore_errors=True)
-        rmtree(path.join(here, 'vowpalwabbit.egg-info'), ignore_errors=True)
+        rmtree(os.path.join(here, 'dist'), ignore_errors=True)
+        rmtree(os.path.join(here, 'build'), ignore_errors=True)
+        rmtree(os.path.join(here, 'vowpalwabbit.egg-info'), ignore_errors=True)
         _clean.run(self)
 
 
 class Sdist(_sdist):
     def run(self):
-        # run prep if needed
-        prep()
         _sdist.run(self)
-
-
-class VWBuildExt(_build_ext):
-    """ Build pylibvw.so and install it as a python extension """
-    def build_extension(self, ext):
-        prep()
-        target_dir = path.dirname(self.get_ext_fullpath(ext.name))
-        if not path.isdir(target_dir):
-            makedirs(target_dir)
-        if system == 'Windows':
-            sys_version = '{v[0]}{v[1]}'.format(v=version_info)
-            if sys_version in ['27', '35', '36']:
-                copy(path.join(here, 'bin', 'pyvw{}.dll'.format(sys_version)), self.get_ext_fullpath(ext.name))
-            else:
-                raise Exception('Pre-built vw/python library for Windows is not supported for this python version')
-        else:
-            py_config_path = 'python-config'
-            projectbase = sysconfig.get_config_var('projectbase')
-            if projectbase is not None:
-                configs = ['python{v[0]}.{v[1]}-config'.format(v=version_info),
-                           'python{v[0]}-config'.format(v=version_info),
-                           'python-config']
-                for config in configs:
-                    py_config_path = path.join(projectbase, config)
-                    if path.exists(py_config_path):
-                        environ['PYTHON_CONFIG'] = py_config_path
-                        break
-
-            environ['PYTHON_VERSION'] = '{v[0]}.{v[1]}'.format(v=version_info)
-            environ['PYTHON_LIBS'] = '-l {}'.format(find_boost())
-            environ['PYTHON_INCLUDE'] = subprocess.check_output([py_config_path, '--includes']).decode("utf-8").strip()
-            environ['PYTHON_LDFLAGS'] = subprocess.check_output([py_config_path, '--ldflags']).decode("utf-8").strip()
-
-            if system == 'Darwin':
-                # Can't find a way around this hack, pulling LDFLAGS from sysconfig does not work in all cases
-                environ['PYTHON_LDFLAGS'] = re.sub(',-stack_size,[0-9]*', '', environ['PYTHON_LDFLAGS'])
-
-            # Use boost library install by Anaconda
-            conda_base = environ.get('CONDA_PREFIX')
-            if conda_base is not None:
-                environ['USER_BOOST_INCLUDE'] = '-I {b}/include/boost -I {b}/include'.format(b=conda_base)
-                environ['USER_BOOST_LIBRARY'] = '-L {b}/lib'.format(b=conda_base)
-
-            subprocess.check_call(['make', 'python'], cwd=path.join(here, 'src'), env=environ)
-            ext_suffix = 'so' if not system == 'Cygwin' else 'dll'
-            copy(path.join(here, 'src', 'python', '{name}.{suffix}'.format(name=ext.name, suffix=ext_suffix)),
-                 self.get_ext_fullpath(ext.name))
-
 
 class InstallLib(_install_lib):
     def build(self):
         _install_lib.build(self)
-        if system == 'Windows':
-            copy(path.join(here, 'bin', 'zlib.dll'), path.join(self.build_dir, 'zlib.dll'))
 
 
 class Tox(_test):
@@ -196,18 +173,13 @@ class Tox(_test):
 
 
 # Get the long description from the README file
-with open(path.join(here, 'README.rst'), encoding='utf-8') as f:
+with open(os.path.join(here, 'README.rst'), encoding='utf-8') as f:
     long_description = f.read()
 
 # Get the current version for the python package from the configure.ac file
-version = '0.0.0'
-for config_path in [path.join(here, '..', 'configure.ac'), path.join(here, 'src', 'configure.ac')]:
-    try:
-        with open(config_path, encoding='utf-8') as f:
-            line = f.readline().strip()
-        version = line.split(',')[1].strip(' []')
-    except IOError:
-        continue
+config_path = os.path.join(here, '..', 'version.txt')
+with open(config_path, encoding='utf-8') as f:
+    version = f.readline().strip()
 
 setup(
     name='vowpalwabbit',
@@ -231,13 +203,14 @@ setup(
         'Programming Language :: Python :: 3.6',
     ],
     keywords='fast machine learning online classification regression',
-    packages=find_packages(exclude=['examples', 'src', 'tests']),
+    packages=find_packages(),
     platforms='any',
     zip_safe=False,
     include_package_data=True,
-    ext_modules=[pylibvw],
+    ext_modules=[CMakeExtension('pylibvw')],
+    distclass=Distribution,
     cmdclass={
-        'build_ext': VWBuildExt,
+        'build_ext': BuildPyLibVWBindingsModule,
         'clean': Clean,
         'sdist': Sdist,
         'test': Tox,
