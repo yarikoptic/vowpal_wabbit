@@ -1,7 +1,6 @@
 #!/usr/bin/make -f
 # -*- makefile -*-
 
-MANPAGES=vowpalwabbit/vw.1
 DEB_HOST_MULTIARCH ?= $(shell dpkg-architecture -qDEB_HOST_MULTIARCH)
 DEB_HOST_ARCH_CPU ?= $(shell dpkg-architecture -qDEB_HOST_ARCH_CPU)
 
@@ -11,7 +10,7 @@ endif
 
 
 %: README
-	dh  $@ --buildsystem=autoconf --with autoreconf
+	dh  $@
 
 README: README.md
 	fgrep -v "Status]" $< \
@@ -28,10 +27,6 @@ override_dh_auto_configure:
       $(shell dpkg-buildflags --export=configure) \
       --with-boost-libdir=/usr/lib/$(DEB_HOST_MULTIARCH) $(OPTS)
 
-override_dh_auto_build:
-	dh_auto_build
-	debian/rules $(MANPAGES)
-
 override_dh_auto_install:
 	dh_auto_install
 	: # We generally do not ship .la on Debian systems
@@ -39,6 +34,8 @@ override_dh_auto_install:
 	: # We do not patch upstream to not build it (useful to test)
 	: # put it makes no sense to install it
 	find debian/ -name library_example -delete
+	: # Now run the tests
+	PATH=$(CURDIR)/debian/tmp/usr/bin:$(PATH) debian/rules run_tests
 
 override_dh_installexamples:
 	dh_installexamples
@@ -50,6 +47,9 @@ override_dh_installexamples:
 	find debian/ -name '*-mswin' -type f | xargs -r chmod a-x
 
 override_dh_auto_test:
+	: # I: will run tests later, using an installed version
+
+run_tests:
 	: # I: run tests providing options for verbose output on failures
 	cd test && ./RunTests -c -d -f
 	: # I: cleaning up after running tests
@@ -59,7 +59,7 @@ override_dh_auto_test:
 override_dh_auto_clean:
 	dh_auto_clean
 	-rm -f README
-	-rm -f test/*.predict test/*.tmp depend $(MANPAGES)
+	-rm -f test/*.predict test/*.tmp depend
 	: # And more garbage left with autoreconf
 	-rm -f vowpalwabbit/config.h vowpalwabbit/depend
 	: # Remove generated makefiles
