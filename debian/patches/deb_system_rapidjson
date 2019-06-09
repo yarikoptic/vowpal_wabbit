@@ -1,0 +1,30 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,4 +1,5 @@
+ cmake_minimum_required(VERSION 3.5)
++set(DEBIAN_USE_SHIPPED_LIBRARIES FALSE)
+ 
+ # Only allow Release and Debug configurations
+ set(CMAKE_CONFIGURATION_TYPES Debug Release CACHE TYPE INTERNAL FORCE)
+@@ -126,6 +127,8 @@ find_package(Boost REQUIRED COMPONENTS p
+ find_package(ZLIB REQUIRED)
+ 
+ # Ensure rapidjson submodule is ready
++# Disabled for Debian build since we would like to use system wide rapidjson
++if(DEBIAN_USE_SHIPPED_LIBRARIES)
+ find_package(Git QUIET)
+ if(GIT_FOUND AND EXISTS "${PROJECT_SOURCE_DIR}/.git")
+   # Update submodules as needed
+@@ -144,9 +147,12 @@ endif()
+ if(NOT EXISTS "${PROJECT_SOURCE_DIR}/rapidjson/CMakeLists.txt")
+   message(FATAL_ERROR "The submodules were not downloaded! GIT_SUBMODULE was turned off or failed. Please update submodules and try again.")
+ endif()
++endif(DEBIAN_USE_SHIPPED_LIBRARIES)
+ 
+ add_library(rapidjson INTERFACE)
++if(DEBIAN_USE_SHIPPED_LIBRARIES)
+ target_include_directories(rapidjson INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/rapidjson/include)
++endif(DEBIAN_USE_SHIPPED_LIBRARIES)
+ 
+ add_subdirectory(cluster)
+ add_subdirectory(library)
